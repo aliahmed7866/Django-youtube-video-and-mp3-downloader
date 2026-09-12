@@ -23,7 +23,7 @@ function render() {
   previous=signature;
   $('#jobs').replaceChildren();$('#empty').hidden=visible.length>0;
   $('#empty h3').textContent=jobs.length?'No downloads match this view.':'A little space for your favourites.';
-  $('#empty p').textContent=jobs.length?'Try a different filter or search.':'Paste a YouTube link above to save your first video or track.';
+  $('#empty p').textContent=jobs.length?'Try a different filter or search.':'Paste a YouTube or TikTok link above to save your first video or track.';
   for(const j of visible){
     const card=node('article','','job');card.append(node('div',j.kind==='audio'?'♫':'▷','job-icon'));
     const content=node('div','');content.append(node('h3',j.title||j.url),node('p',`${j.kind==='audio'?'MP3':'MP4'} · ${j.quality}${j.kind==='audio'?' kbps':'p max'} · ${new Date(j.created*1000).toLocaleDateString()}`));
