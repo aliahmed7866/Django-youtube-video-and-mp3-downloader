@@ -33,6 +33,33 @@ def youtube_url(raw):
     return 'https://www.youtube.com/watch?v=' + ident
 
 
+def media_url(raw):
+    """Accept only individual videos and TikTok's official short-link shapes."""
+    if not isinstance(raw, str) or len(raw) > 2048:
+        raise ValueError('Paste a YouTube or TikTok video link.')
+    parsed = urlsplit(raw.strip())
+    if parsed.scheme not in ('https', 'http') or parsed.username or parsed.password or parsed.port not in (None, 80, 443):
+        raise ValueError('Use a YouTube or TikTok video link.')
+    host = (parsed.hostname or '').lower()
+    if host in ('tiktok.com', 'www.tiktok.com', 'm.tiktok.com'):
+        video = re.fullmatch(r'/@([A-Za-z0-9_.-]+)/video/([0-9]{10,25})/?', parsed.path)
+        if video:
+            return f'https://www.tiktok.com/@{video[1]}/video/{video[2]}'
+        short = re.fullmatch(r'/t/([A-Za-z0-9]+)/?', parsed.path)
+        if short:
+            return f'https://www.tiktok.com/t/{short[1]}/'
+    elif host in ('vm.tiktok.com', 'vt.tiktok.com'):
+        short = re.fullmatch(r'/([A-Za-z0-9]+)/?', parsed.path)
+        if short:
+            return f'https://{host}/{short[1]}/'
+    else:
+        try:
+            return youtube_url(raw)
+        except ValueError:
+            pass
+    raise ValueError('Paste an individual YouTube or TikTok video link. Profiles, playlists, photo posts and live streams are not supported.')
+
+
 def create_app(data_dir=None):
     app = Flask(__name__)
     root = Path(data_dir or os.environ.get('MEDIAHUB_DATA_DIR', '~/.local/share/mediahub')).expanduser().resolve()
@@ -103,7 +130,7 @@ def create_app(data_dir=None):
         if not isinstance(body, dict):
             return jsonify(error='Expected a JSON object.'), 400
         try:
-            url = youtube_url(body.get('url'))
+            url = media_url(body.get('url'))
             kind = body.get('kind', 'video')
             quality = str(body.get('quality', '720'))
             choices = {'video': {'360', '480', '720', '1080'}, 'audio': {'128', '192', '320'}}

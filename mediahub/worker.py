@@ -6,10 +6,12 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 
 
 def command(job, directory):
     args = [sys.executable, '-m', 'yt_dlp', '--ignore-config', '--no-playlist',
+            '--use-extractors', 'Youtube,TikTok,vm[.]tiktok',
             '--no-live-from-start', '--match-filter', '!is_live', '--js-runtimes', 'node',
             '--socket-timeout', '20', '--retries', '3', '--fragment-retries', '3',
             '--max-filesize', '2G', '--newline', '--no-colors', '--progress',
@@ -21,22 +23,28 @@ def command(job, directory):
         args += ['-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', job['quality']+'K']
     else:
         height = job['quality']
-        args += ['-f', f'bv*[height<={height}][ext=mp4]+ba[ext=m4a]/b[height<={height}][ext=mp4]', '--merge-output-format', 'mp4']
+        host = urlsplit(job['url']).hostname or ''
+        if host == 'tiktok.com' or host.endswith('.tiktok.com'):
+            # TikTok videos normally include audio. Cap the short edge for portrait media.
+            formats = f'b[width<={height}][ext=mp4]/b[height<={height}][ext=mp4]'
+        else:
+            formats = f'bv*[height<={height}][ext=mp4]+ba[ext=m4a]/b[height<={height}][ext=mp4]'
+        args += ['-f', formats, '--merge-output-format', 'mp4']
     return args + ['--', job['url']]
 
 
 def friendly_error(message):
     lower = message.lower()
     if 'sign in' in lower or 'not a bot' in lower or 'private video' in lower:
-        return 'YouTube requires account verification or this video is private. Try a publicly available video.'
+        return 'This platform requires account verification or this video is private. Try a publicly available video.'
     if 'not available' in lower or 'unavailable' in lower or 'removed' in lower:
         return 'This video or format is unavailable. Try another video or a lower quality.'
     if 'timed out' in lower or 'connection' in lower or 'certificate' in lower:
-        return 'Could not connect to YouTube. Check your connection and retry. If it continues, update yt-dlp.'
+        return 'Could not connect to the video platform. Check your connection and retry. If it continues, update yt-dlp.'
     if 'no space' in lower:
         return 'Your device has run out of space. Remove saved downloads or free storage, then retry.'
     if 'error:' in lower:
-        return 'YouTube could not complete this download. Retry or update yt-dlp; technical details are in the download log.'
+        return 'The platform could not complete this download. Retry or update yt-dlp; technical details are in the download log.'
     return message[-700:]
 
 

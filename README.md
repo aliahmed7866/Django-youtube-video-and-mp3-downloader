@@ -1,6 +1,6 @@
 # Media Hub
 
-A personal YouTube video and MP3 downloader rebuilt for Termux and the AYCF admin hub. Mobile-first, local-only Flask + Waitress interface on **127.0.0.1:8083**, powered by yt-dlp and FFmpeg.
+A personal YouTube and TikTok video and MP3 downloader rebuilt for Termux and the AYCF admin hub. Mobile-first, local-only Flask + Waitress interface on **127.0.0.1:8083**, powered by yt-dlp and FFmpeg.
 
 ## Install on your phone
 
@@ -21,7 +21,7 @@ The installer preserves existing registry entries and backs up the registry befo
 
 ## Everyday use
 
-Paste a YouTube video, Shorts or youtu.be link; choose MP4 (up to 360/480/720/1080p) or MP3 (128/192/320 kbps). Downloads queue immediately, then run one at a time. Video quality is a ceiling; a lower available MP4 format may be selected. MP3 bitrate does not improve the original source quality.
+Paste a YouTube video, Shorts, youtu.be, TikTok video or official TikTok short link; choose MP4 (up to 360/480/720/1080p) or MP3 (128/192/320 kbps). Downloads queue immediately, then run one at a time. Video quality is a ceiling; a lower available MP4 format may be selected. MP3 bitrate does not improve the original source quality.
 
 Progress covers individual media streams and can restart when audio begins. “Finishing your file” means FFmpeg is merging or converting. Save completed files through your browser into Android's Downloads. Retry failed/cancelled jobs, filter/search recent history, or remove files you no longer need. Playlists and live streams are excluded.
 
@@ -72,3 +72,9 @@ python -m venv .venv
 ```
 
 Tests use simulated downloader subprocesses and temporary data; they do not download from YouTube. The previous Django/pytube/moviepy implementation is retained in Git history. Its committed database is no longer tracked or used; existing local files are not migrated into the new queue.
+
+## TikTok support
+
+Individual public video URLs (`www.tiktok.com/@creator/video/…`) and official short links (`vm.tiktok.com`, `vt.tiktok.com`, `www.tiktok.com/t/…`) use the same queue, MP4 and MP3 options. Tracking parameters are discarded. Profiles, photo slideshows and live streams are excluded. For TikTok portrait video, the quality ceiling uses the shorter edge (for example, 720 × 1280 fits 720p). If TikTok offers no format within the limit, choose a higher quality.
+
+Short links are resolved by yt-dlp in the background. Different short links pointing to the same video are not deduplicated before resolution. The extractor set is restricted to YouTube and individual TikTok videos/short links. Watermark-free output is not guaranteed. Availability depends on TikTok's regional, login and extraction restrictions; no account or cookie handling is added. See [yt-dlp's TikTok extractor](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py). Live TikTok downloads need verification on the phone.
