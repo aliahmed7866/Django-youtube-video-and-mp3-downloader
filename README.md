@@ -25,7 +25,9 @@ Paste a YouTube video, Shorts or youtu.be link; choose MP4 (up to 360/480/720/10
 
 Progress covers individual media streams and can restart when audio begins. “Finishing your file” means FFmpeg is merging or converting. Save completed files through your browser into Android's Downloads. Retry failed/cancelled jobs, filter/search recent history, or remove files you no longer need. Playlists and live streams are excluded.
 
-The last 200 jobs appear in the interface; queued work is processed oldest first. At most 20 active/queued jobs are accepted. Each source stream is limited to 2 GB, and a download times out after two hours; the combined output may be larger. Downloads are refused if free space is below 256 MB. These are guardrails, not a storage quota. Failed partial files remain until their job is removed.
+The initial view includes 200 jobs with active downloads always first; Show more history expands this up to 5,000 jobs. Counts cover all stored jobs; search and filters apply to the loaded history. Queued work is processed oldest first. At most 20 active/queued jobs are accepted. Each source stream is limited to 2 GB, and a download times out after two hours; the combined output may be larger. Downloads are refused if free space is below 256 MB. These are guardrails, not a storage quota. Failed partial files remain until their job is removed.
+
+Pause queue stops upcoming downloads while allowing the current download to finish. The pause setting persists across service restarts. Resume queue restarts processing. Adding the same video, format and quality twice while it is active is rejected; a different quality is allowed. The browser remembers your last successfully selected format and quality when local storage is available. Titles appear as soon as the downloader retrieves them, and common failures include recovery advice instead of raw extractor output.
 
 ## Storage and service management
 

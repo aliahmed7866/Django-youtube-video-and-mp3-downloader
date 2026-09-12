@@ -14,6 +14,7 @@ def command(job, directory):
             '--socket-timeout', '20', '--retries', '3', '--fragment-retries', '3',
             '--max-filesize', '2G', '--newline', '--no-colors', '--progress',
             '--progress-template', 'download:PROGRESS:%(progress._percent_str)s',
+            '--print', 'before_dl:TITLE:%(title)j',
             '--print', 'after_move:RESULT:%()j', '--no-simulate',
             '-o', str(directory / '%(title).150B [%(id)s].%(ext)s')]
     if job['kind'] == 'audio':
@@ -22,6 +23,21 @@ def command(job, directory):
         height = job['quality']
         args += ['-f', f'bv*[height<={height}][ext=mp4]+ba[ext=m4a]/b[height<={height}][ext=mp4]', '--merge-output-format', 'mp4']
     return args + ['--', job['url']]
+
+
+def friendly_error(message):
+    lower = message.lower()
+    if 'sign in' in lower or 'not a bot' in lower or 'private video' in lower:
+        return 'YouTube requires account verification or this video is private. Try a publicly available video.'
+    if 'not available' in lower or 'unavailable' in lower or 'removed' in lower:
+        return 'This video or format is unavailable. Try another video or a lower quality.'
+    if 'timed out' in lower or 'connection' in lower or 'certificate' in lower:
+        return 'Could not connect to YouTube. Check your connection and retry. If it continues, update yt-dlp.'
+    if 'no space' in lower:
+        return 'Your device has run out of space. Remove saved downloads or free storage, then retry.'
+    if 'error:' in lower:
+        return 'YouTube could not complete this download. Retry or update yt-dlp; technical details are in the download log.'
+    return message[-700:]
 
 
 class Worker:
@@ -46,7 +62,7 @@ class Worker:
                 if self.store.get(job['id'])['status'] in ('cancelled', 'cancelling'):
                     self.store.update(job['id'], status='cancelled')
                 else:
-                    self.store.update(job['id'], status='failed', error=str(exc)[-700:])
+                    self.store.update(job['id'], status='failed', error=friendly_error(str(exc)))
 
     def download(self, job):
         if not shutil.which('ffmpeg'):
@@ -71,6 +87,8 @@ class Worker:
                                 self.store.update(job['id'], progress=progress)
                             except ValueError:
                                 pass
+                        elif line.startswith('TITLE:'):
+                            self.store.update(job['id'], title=str(json.loads(line[6:])))
                         elif line.startswith('RESULT:'):
                             result = json.loads(line[7:])
                         elif '[ExtractAudio]' in line or '[Merger]' in line:
@@ -85,6 +103,7 @@ class Worker:
                             except subprocess.TimeoutExpired:
                                 os.killpg(process.pid, signal.SIGKILL)
                         if cancelled:
+                            process.wait()
                             self.store.update(job['id'], status='cancelled')
                             return
                         raise RuntimeError('Download interrupted or exceeded two hours. Retry when ready.')

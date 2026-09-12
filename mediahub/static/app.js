@@ -1,7 +1,10 @@
 'use strict';
 const $ = s => document.querySelector(s);
 const token = $('meta[name="csrf-token"]').content;
-let jobs = [], filter = 'all', previous = '';
+let jobs = [], filter = 'all', previous = '', paused = false, historyLimit = 200, refreshing = false;
+let saved = {};
+try { saved = JSON.parse(localStorage.getItem('mediahub-preferences') || '{}') || {}; } catch {}
+function savePreferences(){try{localStorage.setItem('mediahub-preferences', JSON.stringify({kind:$('input[name=kind]:checked').value,quality:$('#quality').value}));}catch{}}
 const active = j => ['queued','downloading','processing','cancelling'].includes(j.status);
 async function api(url, method='GET', data) {
   const response = await fetch(url, {method, headers:{'Content-Type':'application/json','X-CSRF-Token':token}, body:data ? JSON.stringify(data):undefined});
@@ -15,7 +18,7 @@ function render() {
   const search=$('#search').value.toLowerCase();
   const visible=jobs.filter(j=>(filter==='all'||(filter==='active'?active(j):j.status===filter)) && (j.title+' '+j.url).toLowerCase().includes(search));
   const signature=JSON.stringify(visible);
-  $('#count').textContent=jobs.length;
+
   if(signature===previous)return;
   previous=signature;
   $('#jobs').replaceChildren();$('#empty').hidden=visible.length>0;
@@ -36,10 +39,32 @@ function render() {
     card.append(actions);$('#jobs').append(card);
   }
 }
-async function refresh(){try{const data=await api('/api/jobs');jobs=data.jobs;$('#storage').textContent=`${(data.free_bytes/1024**3).toFixed(1)} GB free on device`;$('#connection').textContent='';render();}catch(e){$('#connection').textContent='Cannot reach Media Hub. Check the service in your admin hub.';}}
-$('form').addEventListener('submit',async e=>{e.preventDefault();$('#submit').disabled=true;try{await api('/api/jobs','POST',{url:$('#url').value,kind:$('input[name=kind]:checked').value,quality:$('#quality').value});$('#url').value='';$('#message').textContent='Added to your download queue.';await refresh();}catch(e){$('#message').textContent=e.message;}finally{$('#submit').disabled=false;}});
+async function refresh(){
+  if(refreshing)return;
+  refreshing=true;
+  try {
+    const data=await api(`/api/jobs?limit=${historyLimit}`);
+    jobs=data.jobs;paused=data.paused;
+    $('#count').textContent=data.total;
+    $('#storage').textContent=`${(data.free_bytes/1024**3).toFixed(1)} GB free on device`;
+    const counts=data.counts;
+    $('#queue-summary').textContent=`${paused?'Queue paused · Current download will finish':'Queue running'} · ${counts.queued||0} waiting · ${counts.complete||0} ready`;
+    $('#pause-queue').textContent=paused?'Resume queue':'Pause queue';
+    $('#pause-queue').setAttribute('aria-pressed',String(paused));
+    $('#load-more').hidden=jobs.length>=data.total || historyLimit>=5000;
+    $('#connection').textContent='';render();
+  } catch(e) { $('#connection').textContent='Cannot reach Media Hub. Check the service in your admin hub.'; }
+  finally {refreshing=false;}
+}
+$('#pause-queue').onclick=async()=>{const button=$('#pause-queue');button.disabled=true;try{await api('/api/queue','POST',{paused:!paused});await refresh();}catch(e){$('#message').textContent=e.message;}finally{button.disabled=false;}};
+$('#load-more').onclick=()=>{historyLimit=Math.min(5000,historyLimit+200);refresh();};
+$('form').addEventListener('submit',async e=>{e.preventDefault();$('#submit').disabled=true;try{await api('/api/jobs','POST',{url:$('#url').value,kind:$('input[name=kind]:checked').value,quality:$('#quality').value});savePreferences();$('#url').value='';$('#message').textContent='Added to your download queue.';await refresh();}catch(e){$('#message').textContent=e.message;}finally{$('#submit').disabled=false;}});
 for(const radio of document.querySelectorAll('input[name=kind]'))radio.addEventListener('change',()=>{const audio=radio.value==='audio';$('#quality').replaceChildren();for(const [value,label] of audio?[['128','128 kbps · Small'],['192','192 kbps · Balanced'],['320','320 kbps · High']]:[['360','360p · Small'],['480','480p · Standard'],['720','720p · HD'],['1080','1080p · Full HD']]){const option=node('option',label);option.value=value;option.selected=value===(audio?'192':'720');$('#quality').append(option);}});
 $('#paste').onclick=async()=>{try{$('#url').value=await navigator.clipboard.readText();}catch(e){$('#url').focus();$('#message').textContent='Press and hold the link field, then choose Paste.';}};
 for(const button of document.querySelectorAll('[data-filter]'))button.onclick=()=>{filter=button.dataset.filter;for(const b of document.querySelectorAll('[data-filter]'))b.setAttribute('aria-pressed',String(b===button));render();};
 $('#search').addEventListener('input',render);
+$('#quality').addEventListener('change',savePreferences);
+for(const radio of document.querySelectorAll('input[name=kind]'))radio.addEventListener('change',savePreferences);
+if(['audio','video'].includes(saved.kind)){const radio=document.querySelector(`input[value=${saved.kind}]`);radio.checked=true;radio.dispatchEvent(new Event('change'));if([...$('#quality').options].some(o=>o.value===saved.quality))$('#quality').value=saved.quality;savePreferences();}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 async function poll(){if(!document.hidden)await refresh();setTimeout(poll,2500);}poll();

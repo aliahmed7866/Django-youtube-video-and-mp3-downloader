@@ -81,7 +81,21 @@ def create_app(data_dir=None):
 
     @app.get('/api/jobs')
     def jobs():
-        return jsonify(jobs=store.list(), free_bytes=shutil.disk_usage(root).free)
+        try:
+            limit = int(request.args.get('limit', '200'))
+            if limit < 1 or limit > 5000:
+                raise ValueError()
+        except ValueError:
+            return jsonify(error='History limit must be between 1 and 5000.'), 400
+        return jsonify(jobs=store.list(limit), free_bytes=shutil.disk_usage(root).free, **store.summary())
+
+    @app.post('/api/queue')
+    def queue():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or type(body.get('paused')) is not bool:
+            return jsonify(error='Choose pause or resume.'), 400
+        store.pause(body['paused'])
+        return jsonify(store.summary())
 
     @app.post('/api/jobs')
     def add():
