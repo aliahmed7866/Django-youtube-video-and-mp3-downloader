@@ -66,3 +66,9 @@ def test_real_x_format_selector(tmp_path, layout):
         assert result[0]['format_id'] == ('v+a' if layout == 'split' else 'v')
     audio = command({'url':url,'kind':'audio','quality':'192'},tmp_path)
     assert audio[audio.index('--audio-format')+1] == 'mp3'
+
+
+def test_x_syndication_fallback_argument(tmp_path):
+    url = media_url('https://x.com/creator/status/1234567890123456789')
+    args = command({'url': url, 'kind': 'video', 'quality': '720'}, tmp_path, 'syndication')
+    assert args[args.index('--extractor-args') + 1] == 'twitter:api=syndication'
