@@ -35,14 +35,20 @@ def youtube_url(raw):
 
 
 def media_url(raw):
-    """Accept only individual videos and TikTok's official short-link shapes."""
+    """Accept individual posts on supported platforms and official TikTok short links."""
     if not isinstance(raw, str) or len(raw) > 2048:
-        raise ValueError('Paste a YouTube, TikTok or Instagram video link.')
+        raise ValueError('Paste a YouTube, TikTok, Instagram or X/Twitter video link.')
     parsed = urlsplit(raw.strip())
     if parsed.scheme not in ('https', 'http') or parsed.username or parsed.password or parsed.port not in (None, 80, 443):
-        raise ValueError('Use a YouTube, TikTok or Instagram video link.')
+        raise ValueError('Use a YouTube, TikTok, Instagram or X/Twitter video link.')
     host = (parsed.hostname or '').lower()
-    if host in ('instagram.com', 'www.instagram.com', 'm.instagram.com'):
+    if host in ('x.com', 'www.x.com', 'm.x.com', 'mobile.x.com',
+                'twitter.com', 'www.twitter.com', 'm.twitter.com', 'mobile.twitter.com'):
+        post = re.fullmatch(r'/(?:(?:[A-Za-z0-9_]{1,15}|i/web)/status|statuses)/([0-9]{1,25})(?:/video/([1-9][0-9]?))?/?', parsed.path)
+        if post:
+            suffix = f'/video/{post[2]}' if post[2] else ''
+            return f'https://x.com/i/web/status/{post[1]}{suffix}'
+    elif host in ('instagram.com', 'www.instagram.com', 'm.instagram.com'):
         post = re.fullmatch(r'/(?!share/)(?:[A-Za-z0-9_.]+/)?(p|tv|reel|reels)/([A-Za-z0-9_-]{5,64})/?', parsed.path)
         if post:
             # One shortcode can appear under p, reel and reels; normalize for deduplication.
@@ -63,7 +69,7 @@ def media_url(raw):
             return youtube_url(raw)
         except ValueError:
             pass
-    raise ValueError('Paste an individual YouTube, TikTok or Instagram video link. Profiles, playlists, Stories and live streams are not supported.')
+    raise ValueError('Paste an individual YouTube, TikTok, Instagram or X/Twitter video link. Profiles, playlists, Stories and live streams are not supported.')
 
 
 def create_app(data_dir=None):
@@ -117,7 +123,7 @@ def create_app(data_dir=None):
             'id': '/', 'name': 'Media Hub', 'short_name': 'Media Hub',
             'start_url': '/', 'scope': '/', 'display': 'standalone',
             'background_color': '#10191b', 'theme_color': '#10191b',
-            'description': 'Your YouTube, TikTok and Instagram videos, saved for offline.',
+            'description': 'Your YouTube, TikTok, Instagram and X/Twitter videos, saved for offline.',
             'icons': [{'src': f'/static/icon-{size}.png', 'sizes': f'{size}x{size}', 'type': 'image/png', 'purpose': 'any maskable'} for size in (192, 512)],
             'share_target': {'action': '/', 'method': 'GET', 'params': {'url': 'url', 'text': 'text', 'title': 'title'}},
         })

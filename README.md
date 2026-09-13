@@ -1,6 +1,6 @@
 # Media Hub
 
-A personal YouTube, TikTok and Instagram video and MP3 downloader rebuilt for Termux and the AYCF admin hub. Mobile-first, local-only Flask + Waitress interface on **127.0.0.1:8083**, powered by yt-dlp and FFmpeg.
+A personal YouTube, TikTok, Instagram and X/Twitter video and MP3 downloader rebuilt for Termux and the AYCF admin hub. Mobile-first, local-only Flask + Waitress interface on **127.0.0.1:8083**, powered by yt-dlp and FFmpeg.
 
 ## Install on your phone
 
@@ -77,7 +77,7 @@ Tests use simulated downloader subprocesses and temporary data; they do not down
 
 Individual public video URLs (`www.tiktok.com/@creator/video/…`) and official short links (`vm.tiktok.com`, `vt.tiktok.com`, `www.tiktok.com/t/…`) use the same queue, MP4 and MP3 options. Tracking parameters are discarded. Profiles, photo slideshows and live streams are excluded. For TikTok portrait video, the quality ceiling uses the shorter edge (for example, 720 × 1280 fits 720p). If TikTok offers no format within the limit, choose a higher quality.
 
-Short links are resolved by yt-dlp in the background. Different short links pointing to the same video are not deduplicated before resolution. The extractor set is restricted to YouTube and individual TikTok videos/short links. Watermark-free output is not guaranteed. Availability depends on TikTok's regional, login and extraction restrictions; no account or cookie handling is added. See [yt-dlp's TikTok extractor](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py). Live TikTok downloads need verification on the phone.
+Short links are resolved by yt-dlp in the background. Different short links pointing to the same video are not deduplicated before resolution. The extractor set is restricted to the supported individual-post extractors. Watermark-free output is not guaranteed. Availability depends on TikTok's regional, login and extraction restrictions; no account or cookie handling is added. See [yt-dlp's TikTok extractor](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py). Live TikTok downloads need verification on the phone.
 
 ## Instagram, playback and phone sharing
 
@@ -113,3 +113,9 @@ The installer now waits for runit's supervision FIFO before enabling either the 
 ### Instagram video works differently from audio
 
 Instagram may publish MP4 video and M4A audio as separate streams. Media Hub now merges these with FFmpeg and also accepts combined video/audio files. Known dimensions within the selected short-edge limit are preferred; if the platform supplies no dimensions, an MP4 stream can still be selected, but its resolution cannot be guaranteed in advance. If only a known higher-resolution format is available, choose a higher video quality rather than repeatedly retrying the same limit.
+
+## X / Twitter
+
+Paste a public video-post URL from `x.com` or `twitter.com`, including mobile links and shared captions. Tracking parameters are removed and both domains normalize to the same post URL for duplicate detection. A post downloads its first video; a link ending in `/video/2` (or another positive index) preserves that media selection.
+
+MP4 and MP3 use the existing queue, playback, retries and phone sharing. X/Twitter has its own collection filter. MP4 quality uses the shorter-edge ceiling, supports split or combined streams, and accepts silent MP4 clips; silent clips cannot produce MP3 audio. Profiles, search, Spaces, photo links and `t.co` redirects are excluded; copy the original post link. Private or login-restricted posts may fail; no credentials or cookie import is added. Live X extraction still needs verification on the phone.

@@ -48,7 +48,7 @@ def test_short_link_extractors_and_vertical_formats(tmp_path):
     args = command({'url':'https://vm.tiktok.com/ZMR123/', 'kind':'video', 'quality':'720'}, tmp_path)
     selected = args[args.index('--use-extractors')+1].split(',')
     with YoutubeDL({'allowed_extractors':selected, 'quiet':True}) as ydl:
-        assert set(ydl._ies) == {'Youtube','TikTok','TikTokVM','Instagram'}
+        assert set(ydl._ies) == {'Youtube','TikTok','TikTokVM','Instagram','Twitter'}
         selector = ydl.build_format_selector(args[args.index('-f')+1])
         formats = [{'format_id':'720','width':720,'height':1280,'ext':'mp4','vcodec':'h264','acodec':'aac','url':'https://example.com/video'}]
         result = list(selector({'formats':formats,'has_merged_format':True,'incomplete_formats':False}))
