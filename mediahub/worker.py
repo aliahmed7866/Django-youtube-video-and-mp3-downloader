@@ -25,8 +25,14 @@ def command(job, directory):
         height = job['quality']
         host = urlsplit(job['url']).hostname or ''
         if host in ('tiktok.com', 'instagram.com') or host.endswith(('.tiktok.com', '.instagram.com')):
-            # Social videos normally include audio. Cap the short edge for portrait media.
-            formats = f'b[width<={height}][ext=mp4]/b[height<={height}][ext=mp4]'
+            # Instagram may expose separate DASH video/audio or omit dimensions.
+            # Prefer known dimensions within the short-edge cap, then unknown dimensions.
+            selectors = []
+            for dimension_filter in (f'[width<={height}]', f'[height<={height}]', '[width=?0][height=?0]'):
+                video = f'bv{dimension_filter}[ext=mp4]'
+                combined = f'b{dimension_filter}[ext=mp4]'
+                selectors.extend((f'{video}+ba[ext=m4a]', combined))
+            formats = '/'.join(selectors)
         else:
             formats = f'bv*[height<={height}][ext=mp4]+ba[ext=m4a]/b[height<={height}][ext=mp4]'
         args += ['-f', formats, '--merge-output-format', 'mp4']
@@ -41,6 +47,8 @@ def friendly_error(message):
         return 'The platform is limiting access or requires login. Try a public video later; private-account downloads are not supported.'
     if 'sign in' in lower or 'not a bot' in lower or 'private video' in lower:
         return 'This platform requires account verification or this video is private. Try a publicly available video.'
+    if 'requested format' in lower and ('not available' in lower or 'unavailable' in lower):
+        return 'No MP4 video matched this quality. Try a higher video quality (for example 1080p). Audio may still be available.'
     if 'not available' in lower or 'unavailable' in lower or 'removed' in lower:
         return 'This video or format is unavailable. Try another video or a lower quality.'
     if 'timed out' in lower or 'connection' in lower or 'certificate' in lower:

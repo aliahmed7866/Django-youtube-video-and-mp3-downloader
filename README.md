@@ -109,3 +109,7 @@ The service worker never caches session pages, APIs or media. It displays an off
 ### Installation reliability
 
 The installer now waits for runit's supervision FIFO before enabling either the app or updater, avoiding the initial `unable to open supervise/ok` race. It also checks that FFmpeg actually executes and reports `pkg upgrade` guidance for broken native libraries. The existing saved port and admin registration are preserved.
+
+### Instagram video works differently from audio
+
+Instagram may publish MP4 video and M4A audio as separate streams. Media Hub now merges these with FFmpeg and also accepts combined video/audio files. Known dimensions within the selected short-edge limit are preferred; if the platform supplies no dimensions, an MP4 stream can still be selected, but its resolution cannot be guaranteed in advance. If only a known higher-resolution format is available, choose a higher video quality rather than repeatedly retrying the same limit.
