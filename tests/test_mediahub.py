@@ -182,4 +182,4 @@ def test_friendly_error_messages():
     assert 'account verification' in friendly_error('ERROR: Sign in to confirm you are not a bot')
     assert 'connection' in friendly_error('SSL certificate failed')
     assert 'space' in friendly_error('No space left on device')
-    assert 'lower quality' in friendly_error('Requested format is not available')
+    assert 'higher video quality' in friendly_error('Requested format is not available')
