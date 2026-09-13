@@ -6,10 +6,11 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
 
-def command(job, directory, twitter_api=None):
+def command(job, directory, twitter_api=None, cookies_path=None):
     args = [sys.executable, '-m', 'yt_dlp', '--ignore-config', '--no-playlist',
             '--use-extractors', 'Youtube,TikTok,vm[.]tiktok,Instagram,twitter',
             '--playlist-items', '1', '--no-live-from-start', '--match-filter', '!is_live', '--js-runtimes', 'node',
@@ -21,6 +22,8 @@ def command(job, directory, twitter_api=None):
             '-o', str(directory / '%(title).150B [%(id)s].%(ext)s')]
     if twitter_api:
         args += ['--extractor-args', f'twitter:api={twitter_api}']
+    if cookies_path:
+        args += ['--cookies', str(cookies_path)]
     if job['kind'] == 'audio':
         args += ['-f', 'bestaudio/best', '-x', '--audio-format', 'mp3', '--audio-quality', job['quality']+'K']
     else:
@@ -46,13 +49,25 @@ def is_x_url(url):
     return host in ('x.com', 'twitter.com') or host.endswith(('.x.com', '.twitter.com'))
 
 
-def friendly_error(message):
+def x_cookie_path():
+    configured = os.environ.get('MEDIAHUB_X_COOKIES')
+    path = Path(configured).expanduser() if configured else Path.home() / '.config' / 'mediahub' / 'x-cookies.txt'
+    return path if path.is_file() else None
+
+
+def friendly_error(message, is_x=False, cookies_available=False):
     lower = message.lower()
     if 'no video' in lower or 'not a video' in lower or 'no video could be found' in lower:
-        return 'This post has no downloadable video. If it visibly contains a video, retry once because the platform may be temporarily limiting extraction.'
+        if is_x:
+            if cookies_available:
+                return 'X still did not expose a downloadable video after anonymous, syndication and signed-in cookie attempts. Check the download log; the post may be private, removed or use unsupported media.'
+            return 'This X post may be hidden behind a sensitive-content or sign-in warning. Add your own X cookies at ~/.config/mediahub/x-cookies.txt, restart Media Hub, then retry.'
+        return 'This post has no downloadable video. Try a Reel or video post rather than a photo.'
     if 'empty media response' in lower or 'login required' in lower or 'rate-limit' in lower:
         return 'The platform is limiting access or requires login. Try a public video later; private-account downloads are not supported.'
     if 'sign in' in lower or 'not a bot' in lower or 'private video' in lower:
+        if is_x and not cookies_available:
+            return 'X requires signed-in access for this post. Add your own X cookies at ~/.config/mediahub/x-cookies.txt, restart Media Hub, then retry.'
         return 'This platform requires account verification or this video is private. Try a publicly available video.'
     if 'requested format' in lower and ('not available' in lower or 'unavailable' in lower):
         return 'No MP4 video matched this quality. Try a higher video quality (for example 1080p). Audio may still be available.'
@@ -89,7 +104,8 @@ class Worker:
                 if self.store.get(job['id'])['status'] in ('cancelled', 'cancelling'):
                     self.store.update(job['id'], status='cancelled')
                 else:
-                    self.store.update(job['id'], status='failed', error=friendly_error(str(exc)))
+                    cookies = x_cookie_path() if is_x_url(job['url']) else None
+                    self.store.update(job['id'], status='failed', error=friendly_error(str(exc), is_x=is_x_url(job['url']), cookies_available=bool(cookies)))
 
     def download(self, job):
         if not shutil.which('ffmpeg'):
@@ -101,19 +117,30 @@ class Worker:
 
         logfile = directory / 'download.log'
         host_is_x = is_x_url(job['url'])
-        attempts = [None, 'syndication'] if host_is_x else [None]
+        cookies = x_cookie_path() if host_is_x else None
+        attempts = [(None, None)]
+        if host_is_x:
+            attempts.append(('syndication', None))
+            if cookies:
+                attempts.append((None, cookies))
         last_error = None
 
-        for attempt_index, twitter_api in enumerate(attempts):
+        for attempt_index, (twitter_api, cookies_path) in enumerate(attempts):
             result = None
             tail = ''
             started = time.monotonic()
             process = None
-            mode = twitter_api or 'graphql/default'
+            if cookies_path:
+                mode = 'graphql/default + signed-in cookies'
+            else:
+                mode = twitter_api or 'graphql/default'
             with logfile.open('a') as output, logfile.open() as reader:
                 output.write(f'\n=== extraction attempt {attempt_index + 1}/{len(attempts)} ({mode}) ===\n')
                 output.flush()
-                download_command = command(job, directory) if twitter_api is None else command(job, directory, twitter_api)
+                if twitter_api is None and cookies_path is None:
+                    download_command = command(job, directory)
+                else:
+                    download_command = command(job, directory, twitter_api, cookies_path)
                 process = subprocess.Popen(download_command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
                 try:
                     while True:
