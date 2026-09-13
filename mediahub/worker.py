@@ -27,15 +27,12 @@ def command(job, directory, twitter_api=None):
         height = job['quality']
         host = urlsplit(job['url']).hostname or ''
         if host in ('tiktok.com', 'instagram.com', 'x.com', 'twitter.com') or host.endswith(('.tiktok.com', '.instagram.com', '.x.com', '.twitter.com')):
-            # Instagram may expose separate DASH video/audio or omit dimensions.
-            # Prefer known dimensions within the short-edge cap, then unknown dimensions.
             selectors = []
             for dimension_filter in (f'[width<={height}]', f'[height<={height}]', '[width=?0][height=?0]'):
                 video = f'bv{dimension_filter}[ext=mp4]'
                 combined = f'b{dimension_filter}[ext=mp4]'
                 selectors.extend((f'{video}+ba[ext=m4a]', combined))
             if host in ('x.com', 'twitter.com') or host.endswith(('.x.com', '.twitter.com')):
-                # X also serves silent clips (animated GIFs) as video-only MP4.
                 selectors.extend(f'bv{cap}[ext=mp4]' for cap in (f'[width<={height}]', f'[height<={height}]', '[width=?0][height=?0]'))
             formats = '/'.join(selectors)
         else:
@@ -51,11 +48,8 @@ def is_x_url(url):
 
 def friendly_error(message):
     lower = message.lower()
-    # Do not claim that X has no video when extraction may have failed at the
-    # API/interstitial layer. The worker retries X through another public API
-    # before this message is reached.
     if 'no video' in lower or 'not a video' in lower or 'no video could be found' in lower:
-        return 'X did not expose a downloadable video for this post. If the post visibly contains a video, retry once; X may be temporarily limiting extraction.'
+        return 'This post has no downloadable video. If it visibly contains a video, retry once because the platform may be temporarily limiting extraction.'
     if 'empty media response' in lower or 'login required' in lower or 'rate-limit' in lower:
         return 'The platform is limiting access or requires login. Try a public video later; private-account downloads are not supported.'
     if 'sign in' in lower or 'not a bot' in lower or 'private video' in lower:
@@ -107,11 +101,6 @@ class Worker:
 
         logfile = directory / 'download.log'
         host_is_x = is_x_url(job['url'])
-        # X can intermittently return an interstitial/limited GraphQL response
-        # even when the post really contains video. yt-dlp supports multiple
-        # public extraction APIs, so retry extraction through syndication before
-        # reporting a genuine no-video failure. No account credentials or access
-        # controls are bypassed here.
         attempts = [None, 'syndication'] if host_is_x else [None]
         last_error = None
 
@@ -124,7 +113,8 @@ class Worker:
             with logfile.open('a') as output, logfile.open() as reader:
                 output.write(f'\n=== extraction attempt {attempt_index + 1}/{len(attempts)} ({mode}) ===\n')
                 output.flush()
-                process = subprocess.Popen(command(job, directory, twitter_api), stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                download_command = command(job, directory) if twitter_api is None else command(job, directory, twitter_api)
+                process = subprocess.Popen(download_command, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
                 try:
                     while True:
                         for line in reader:
@@ -179,8 +169,6 @@ class Worker:
                         return
 
                     last_error = tail[-1200:] or 'Download did not produce a file.'
-                    # A normal X extraction failure is allowed to fall through to
-                    # the syndication attempt. Other failures are terminal.
                     if not host_is_x or attempt_index + 1 == len(attempts):
                         raise RuntimeError(last_error)
                 finally:
