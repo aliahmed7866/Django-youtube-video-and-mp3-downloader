@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="csrf-token" content="{{ csrf }}"><meta name="theme-color" content="#10191b">
-  <meta name="description" content="Your YouTube, TikTok and Instagram videos, saved for offline.">
+  <meta name="description" content="Your YouTube, TikTok, Instagram and X/Twitter videos, saved for offline.">
   <title>Media Hub · Your offline collection</title>
   <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/static/icon-192.png">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
@@ -13,12 +13,12 @@
 <body><div class="shell">
 <header><a class="brand" href="/">m<span>↘</span> <strong>Media Hub</strong></a><div class="header-actions"><button id="install-app" class="secondary" hidden>Add to phone</button><a class="back" href="{{ admin_url }}">← Admin hub</a></div></header>
 <main>
-  <div class="intro"><p class="eyebrow">YOUR PERSONAL MEDIA SPACE</p><h1>Good finds.<br><em>Keep them close.</em></h1><p class="subtitle">Videos worth keeping. Audio for the journey.<br>One collection, always on your device.</p><div class="platforms" aria-label="Supported platforms"><span>YouTube</span><span>TikTok</span><span>Instagram</span></div></div>
+  <div class="intro"><p class="eyebrow">YOUR PERSONAL MEDIA SPACE</p><h1>Good finds.<br><em>Keep them close.</em></h1><p class="subtitle">Videos worth keeping. Audio for the journey.<br>One collection, always on your device.</p><div class="platforms" aria-label="Supported platforms"><span>YouTube</span><span>TikTok</span><span>Instagram</span><span>X/Twitter</span></div></div>
   <section class="composer" aria-labelledby="new-title">
     <div class="section-label"><span class="step">01</span><h2 id="new-title">Add to your collection</h2></div>
     <form id="download-form">
       <label for="url">Video link or shared text</label>
-      <div class="url-row"><input id="url" type="text" inputmode="url" maxlength="8000" placeholder="Paste a YouTube, TikTok or Instagram link…" value="{{ shared_url }}" required autocomplete="off" aria-describedby="link-help"><button type="button" class="secondary" id="paste">Paste</button></div>
+      <div class="url-row"><input id="url" type="text" inputmode="url" maxlength="8000" placeholder="Paste a YouTube, TikTok, Instagram or X/Twitter link…" value="{{ shared_url }}" required autocomplete="off" aria-describedby="link-help"><button type="button" class="secondary" id="paste">Paste</button></div>
       <p id="link-help" class="hint">Reels, Shorts and public video posts. Shared captions are welcome.</p>
       <div class="options">
         <fieldset><legend>Save as</legend><label class="choice"><input type="radio" name="kind" value="video" checked> Video <small>MP4</small></label><label class="choice"><input type="radio" name="kind" value="audio"> Audio <small>MP3</small></label></fieldset>
@@ -31,13 +31,13 @@
   </section>
   <section class="collection" aria-labelledby="collection-title">
     <div class="collection-heading"><div><p class="eyebrow">READY WHEN YOU ARE</p><h2 id="collection-title">Your collection <span id="count">0</span></h2></div><p id="storage" class="hint"></p></div>
-    <div class="toolbar"><div class="filters" role="group" aria-label="Filter collection"><button data-filter="all" aria-pressed="true">All</button><button data-filter="active" aria-pressed="false">In progress</button><button data-filter="complete" aria-pressed="false">Ready</button><button data-filter="failed" aria-pressed="false">Failed</button></div><div class="search-tools"><select id="source-filter" aria-label="Filter by platform"><option value="all">All platforms</option><option>YouTube</option><option>TikTok</option><option>Instagram</option></select><input id="search" type="search" aria-label="Search downloads" placeholder="Search your collection"></div></div>
+    <div class="toolbar"><div class="filters" role="group" aria-label="Filter collection"><button data-filter="all" aria-pressed="true">All</button><button data-filter="active" aria-pressed="false">In progress</button><button data-filter="complete" aria-pressed="false">Ready</button><button data-filter="failed" aria-pressed="false">Failed</button></div><div class="search-tools"><select id="source-filter" aria-label="Filter by platform"><option value="all">All platforms</option><option>YouTube</option><option>TikTok</option><option>Instagram</option><option>X/Twitter</option></select><input id="search" type="search" aria-label="Search downloads" placeholder="Search your collection"></div></div>
     <div class="queue-bar"><p id="queue-summary" role="status"></p><button id="pause-queue" class="secondary" type="button" aria-pressed="false">Pause queue</button></div>
     <p id="connection" role="status"></p><div id="jobs" aria-busy="true"></div>
     <button id="load-more" class="secondary" type="button" hidden>Show more history</button>
     <div id="empty" hidden><div class="empty-icon">↘</div><h3>A little space for your favourites.</h3><p>Paste a video link above to save your first video or track.</p></div>
   </section>
-  <details class="help"><summary>Sharing from your phone</summary><p>After installing the sharing bridge in Termux, choose <strong>Share → Termux</strong> in YouTube, TikTok or Instagram. Media Hub opens with the link ready for you to review.</p><p>You can also install Media Hub from your browser menu. On supported browsers, the installed app can appear directly in the Share menu. If it does not, use Share → Termux or Copy link.</p><p>Termux and the Media Hub service need to be running. Private posts, Stories and login-required videos may not be available.</p></details>
+  <details class="help"><summary>Sharing from your phone</summary><p>After installing the sharing bridge in Termux, choose <strong>Share → Termux</strong> in YouTube, TikTok, Instagram or X/Twitter. Media Hub opens with the link ready for you to review.</p><p>You can also install Media Hub from your browser menu. On supported browsers, the installed app can appear directly in the Share menu. If it does not, use Share → Termux or Copy link.</p><p>Termux and the Media Hub service need to be running. Private posts, Stories and login-required videos may not be available.</p></details>
 </main>
 <footer><span>MEDIA HUB</span><span>On your device. At your pace.</span></footer>
 </div>

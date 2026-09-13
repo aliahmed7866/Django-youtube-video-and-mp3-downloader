@@ -4,7 +4,7 @@ import re
 
 def extract_shared_link(value, validate):
     if not isinstance(value, str) or not value.strip() or len(value) > 8000:
-        raise ValueError('Paste one YouTube, TikTok or Instagram video link.')
+        raise ValueError('Paste one YouTube, TikTok, Instagram or X/Twitter video link.')
     candidates = re.findall(r'https?://[^\s<>"\x00-\x1f]+', value)
     if not candidates:
         raise ValueError('No video link found. Use Copy link or Share in the original app.')

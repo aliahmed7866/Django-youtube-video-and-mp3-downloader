@@ -19,6 +19,7 @@ function message(text) { $('#message').textContent = text; }
 function source(url) {
   try {
     const host = new URL(url).hostname;
+    if (['x.com', 'twitter.com'].some(domain => host === domain || host.endsWith('.' + domain))) return 'X/Twitter';
     if (host === 'instagram.com' || host.endsWith('.instagram.com')) return 'Instagram';
     if (host === 'tiktok.com' || host.endsWith('.tiktok.com')) return 'TikTok';
     if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) return 'YouTube';

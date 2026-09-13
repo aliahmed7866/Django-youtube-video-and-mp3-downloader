@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 def command(job, directory):
     args = [sys.executable, '-m', 'yt_dlp', '--ignore-config', '--no-playlist',
-            '--use-extractors', 'Youtube,TikTok,vm[.]tiktok,Instagram',
+            '--use-extractors', 'Youtube,TikTok,vm[.]tiktok,Instagram,twitter',
             '--playlist-items', '1', '--no-live-from-start', '--match-filter', '!is_live', '--js-runtimes', 'node',
             '--socket-timeout', '20', '--retries', '3', '--fragment-retries', '3',
             '--max-filesize', '2G', '--newline', '--no-colors', '--progress',
@@ -24,7 +24,7 @@ def command(job, directory):
     else:
         height = job['quality']
         host = urlsplit(job['url']).hostname or ''
-        if host in ('tiktok.com', 'instagram.com') or host.endswith(('.tiktok.com', '.instagram.com')):
+        if host in ('tiktok.com', 'instagram.com', 'x.com', 'twitter.com') or host.endswith(('.tiktok.com', '.instagram.com', '.x.com', '.twitter.com')):
             # Instagram may expose separate DASH video/audio or omit dimensions.
             # Prefer known dimensions within the short-edge cap, then unknown dimensions.
             selectors = []
@@ -32,6 +32,9 @@ def command(job, directory):
                 video = f'bv{dimension_filter}[ext=mp4]'
                 combined = f'b{dimension_filter}[ext=mp4]'
                 selectors.extend((f'{video}+ba[ext=m4a]', combined))
+            if host in ('x.com', 'twitter.com') or host.endswith(('.x.com', '.twitter.com')):
+                # X also serves silent clips (animated GIFs) as video-only MP4.
+                selectors.extend(f'bv{cap}[ext=mp4]' for cap in (f'[width<={height}]', f'[height<={height}]', '[width=?0][height=?0]'))
             formats = '/'.join(selectors)
         else:
             formats = f'bv*[height<={height}][ext=mp4]+ba[ext=m4a]/b[height<={height}][ext=mp4]'
@@ -41,7 +44,7 @@ def command(job, directory):
 
 def friendly_error(message):
     lower = message.lower()
-    if 'no video' in lower or 'no video formats' in lower:
+    if 'no video' in lower or 'not a video' in lower:
         return 'This post has no downloadable video. Try a Reel or video post rather than a photo.'
     if 'empty media response' in lower or 'login required' in lower or 'rate-limit' in lower:
         return 'The platform is limiting access or requires login. Try a public video later; private-account downloads are not supported.'

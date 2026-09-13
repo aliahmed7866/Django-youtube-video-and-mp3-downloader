@@ -59,7 +59,7 @@ def test_instagram_post_command_keeps_one_video_and_audio(tmp_path):
     assert args[args.index('--playlist-items')+1] == '1'
     assert '[width<=720]' in args[args.index('-f')+1]
     with YoutubeDL({'allowed_extractors':args[args.index('--use-extractors')+1].split(','), 'quiet':True}) as downloader:
-        assert set(downloader._ies) == {'Youtube', 'TikTok', 'TikTokVM', 'Instagram'}
+        assert set(downloader._ies) == {'Youtube', 'TikTok', 'TikTokVM', 'Instagram', 'Twitter'}
     audio = command({'url':'https://www.instagram.com/p/AbCd123/', 'kind':'audio', 'quality':'192'}, tmp_path)
     assert audio[audio.index('--audio-format')+1] == 'mp3'
     assert 'no downloadable video' in friendly_error('There is no video in this post')
