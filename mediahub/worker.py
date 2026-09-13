@@ -11,8 +11,8 @@ from urllib.parse import urlsplit
 
 def command(job, directory):
     args = [sys.executable, '-m', 'yt_dlp', '--ignore-config', '--no-playlist',
-            '--use-extractors', 'Youtube,TikTok,vm[.]tiktok',
-            '--no-live-from-start', '--match-filter', '!is_live', '--js-runtimes', 'node',
+            '--use-extractors', 'Youtube,TikTok,vm[.]tiktok,Instagram',
+            '--playlist-items', '1', '--no-live-from-start', '--match-filter', '!is_live', '--js-runtimes', 'node',
             '--socket-timeout', '20', '--retries', '3', '--fragment-retries', '3',
             '--max-filesize', '2G', '--newline', '--no-colors', '--progress',
             '--progress-template', 'download:PROGRESS:%(progress._percent_str)s',
@@ -24,8 +24,8 @@ def command(job, directory):
     else:
         height = job['quality']
         host = urlsplit(job['url']).hostname or ''
-        if host == 'tiktok.com' or host.endswith('.tiktok.com'):
-            # TikTok videos normally include audio. Cap the short edge for portrait media.
+        if host in ('tiktok.com', 'instagram.com') or host.endswith(('.tiktok.com', '.instagram.com')):
+            # Social videos normally include audio. Cap the short edge for portrait media.
             formats = f'b[width<={height}][ext=mp4]/b[height<={height}][ext=mp4]'
         else:
             formats = f'bv*[height<={height}][ext=mp4]+ba[ext=m4a]/b[height<={height}][ext=mp4]'
@@ -35,6 +35,10 @@ def command(job, directory):
 
 def friendly_error(message):
     lower = message.lower()
+    if 'no video' in lower or 'no video formats' in lower:
+        return 'This post has no downloadable video. Try a Reel or video post rather than a photo.'
+    if 'empty media response' in lower or 'login required' in lower or 'rate-limit' in lower:
+        return 'The platform is limiting access or requires login. Try a public video later; private-account downloads are not supported.'
     if 'sign in' in lower or 'not a bot' in lower or 'private video' in lower:
         return 'This platform requires account verification or this video is private. Try a publicly available video.'
     if 'not available' in lower or 'unavailable' in lower or 'removed' in lower:

@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from flask import Flask, abort, jsonify, render_template, request, send_file, session
 from .store import Store
+from .links import extract_shared_link
 
 
 def youtube_url(raw):
@@ -36,12 +37,17 @@ def youtube_url(raw):
 def media_url(raw):
     """Accept only individual videos and TikTok's official short-link shapes."""
     if not isinstance(raw, str) or len(raw) > 2048:
-        raise ValueError('Paste a YouTube or TikTok video link.')
+        raise ValueError('Paste a YouTube, TikTok or Instagram video link.')
     parsed = urlsplit(raw.strip())
     if parsed.scheme not in ('https', 'http') or parsed.username or parsed.password or parsed.port not in (None, 80, 443):
-        raise ValueError('Use a YouTube or TikTok video link.')
+        raise ValueError('Use a YouTube, TikTok or Instagram video link.')
     host = (parsed.hostname or '').lower()
-    if host in ('tiktok.com', 'www.tiktok.com', 'm.tiktok.com'):
+    if host in ('instagram.com', 'www.instagram.com', 'm.instagram.com'):
+        post = re.fullmatch(r'/(?!share/)(?:[A-Za-z0-9_.]+/)?(p|tv|reel|reels)/([A-Za-z0-9_-]{5,64})/?', parsed.path)
+        if post:
+            # One shortcode can appear under p, reel and reels; normalize for deduplication.
+            return f'https://www.instagram.com/p/{post[2]}/'
+    elif host in ('tiktok.com', 'www.tiktok.com', 'm.tiktok.com'):
         video = re.fullmatch(r'/@([A-Za-z0-9_.-]+)/video/([0-9]{10,25})/?', parsed.path)
         if video:
             return f'https://www.tiktok.com/@{video[1]}/video/{video[2]}'
@@ -57,7 +63,7 @@ def media_url(raw):
             return youtube_url(raw)
         except ValueError:
             pass
-    raise ValueError('Paste an individual YouTube or TikTok video link. Profiles, playlists, photo posts and live streams are not supported.')
+    raise ValueError('Paste an individual YouTube, TikTok or Instagram video link. Profiles, playlists, Stories and live streams are not supported.')
 
 
 def create_app(data_dir=None):
@@ -96,7 +102,33 @@ def create_app(data_dir=None):
     @app.get('/')
     def index():
         session.setdefault('csrf', secrets.token_hex(24))
-        return render_template('index.html', csrf=session['csrf'], admin_url=os.environ.get('MEDIAHUB_ADMIN_URL', 'http://127.0.0.1:8079'))
+        shared_url, shared_error = '', ''
+        shared = '\n'.join(request.args.get(key, '') for key in ('url', 'text', 'title'))
+        if shared.strip():
+            try:
+                shared_url = extract_shared_link(shared, media_url)
+            except ValueError as exc:
+                shared_error = str(exc)
+        return render_template('index.html', csrf=session['csrf'], shared_url=shared_url, shared_error=shared_error, admin_url=os.environ.get('MEDIAHUB_ADMIN_URL', 'http://127.0.0.1:8079'))
+
+    @app.get('/manifest.webmanifest')
+    def manifest():
+        response = jsonify({
+            'id': '/', 'name': 'Media Hub', 'short_name': 'Media Hub',
+            'start_url': '/', 'scope': '/', 'display': 'standalone',
+            'background_color': '#10191b', 'theme_color': '#10191b',
+            'description': 'Your YouTube, TikTok and Instagram videos, saved for offline.',
+            'icons': [{'src': f'/static/icon-{size}.png', 'sizes': f'{size}x{size}', 'type': 'image/png', 'purpose': 'any maskable'} for size in (192, 512)],
+            'share_target': {'action': '/', 'method': 'GET', 'params': {'url': 'url', 'text': 'text', 'title': 'title'}},
+        })
+        response.mimetype = 'application/manifest+json'
+        return response
+
+    @app.get('/service-worker.js')
+    def service_worker():
+        response = app.send_static_file('service-worker.js')
+        response.headers['Service-Worker-Allowed'] = '/'
+        return response
 
     @app.get('/health')
     def health():
@@ -130,7 +162,7 @@ def create_app(data_dir=None):
         if not isinstance(body, dict):
             return jsonify(error='Expected a JSON object.'), 400
         try:
-            url = media_url(body.get('url'))
+            url = extract_shared_link(body.get('url'), media_url)
             kind = body.get('kind', 'video')
             quality = str(body.get('quality', '720'))
             choices = {'video': {'360', '480', '720', '1080'}, 'audio': {'128', '192', '320'}}
@@ -168,7 +200,7 @@ def create_app(data_dir=None):
         path = (root / job['filename']).resolve()
         if not path.is_relative_to(root / 'downloads' / ident) or not path.is_file():
             abort(404)
-        return send_file(path, as_attachment=True, download_name=path.name, conditional=True)
+        return send_file(path, as_attachment=request.args.get('play') != '1', download_name=path.name, conditional=True)
 
     @app.delete('/api/jobs/<ident>')
     def delete(ident):

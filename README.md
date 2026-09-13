@@ -1,6 +1,6 @@
 # Media Hub
 
-A personal YouTube and TikTok video and MP3 downloader rebuilt for Termux and the AYCF admin hub. Mobile-first, local-only Flask + Waitress interface on **127.0.0.1:8083**, powered by yt-dlp and FFmpeg.
+A personal YouTube, TikTok and Instagram video and MP3 downloader rebuilt for Termux and the AYCF admin hub. Mobile-first, local-only Flask + Waitress interface on **127.0.0.1:8083**, powered by yt-dlp and FFmpeg.
 
 ## Install on your phone
 
@@ -78,3 +78,34 @@ Tests use simulated downloader subprocesses and temporary data; they do not down
 Individual public video URLs (`www.tiktok.com/@creator/video/…`) and official short links (`vm.tiktok.com`, `vt.tiktok.com`, `www.tiktok.com/t/…`) use the same queue, MP4 and MP3 options. Tracking parameters are discarded. Profiles, photo slideshows and live streams are excluded. For TikTok portrait video, the quality ceiling uses the shorter edge (for example, 720 × 1280 fits 720p). If TikTok offers no format within the limit, choose a higher quality.
 
 Short links are resolved by yt-dlp in the background. Different short links pointing to the same video are not deduplicated before resolution. The extractor set is restricted to YouTube and individual TikTok videos/short links. Watermark-free output is not guaranteed. Availability depends on TikTok's regional, login and extraction restrictions; no account or cookie handling is added. See [yt-dlp's TikTok extractor](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py). Live TikTok downloads need verification on the phone.
+
+## Instagram, playback and phone sharing
+
+Paste public Instagram Reel/video-post links (`instagram.com/reel/…`, `/reels/…`, `/p/…`, or legacy `/tv/…`). Links with a creator name before the post type are also accepted. Tracking parameters are removed and shortcode aliases normalize to one URL. Captions containing one supported link can be pasted directly. Multiple different links are rejected so one job always represents one requested video.
+
+Instagram carousels save the first video entry only. Photo-only posts cannot produce a video. Profiles, Stories, live streams and Instagram `/share/…` short links are not supported in this release; use the original Reel/post URL. Instagram may require login, restrict anonymous access or rate-limit requests. No credentials or cookie import is included. MP4 and MP3 use the same queue and retries; quality for TikTok and Instagram is limited by the shorter edge for portrait clips.
+
+Completed downloads now have **Play/Listen**, **Save file** and **Original** actions. Playback supports byte-range requests and runs in a dialog independently of queue polling. Source badges and a platform filter help browse the loaded history. Audio and video quality preferences are remembered separately.
+
+### Share from Android through Termux
+
+Run this once after updating:
+
+```bash
+cd "$HOME/Django-youtube-video-and-mp3-downloader"
+.venv/bin/python termux/install-share.py
+```
+
+Choose **Share → Termux** in the source app. Media Hub opens with the link filled in; choose the format and tap Add download. The bridge reads the current port from `~/.config/mediahub/env`, including a custom port such as 8084. It never executes that configuration file as code. Both Termux and the Media Hub service need to be running.
+
+The setup preserves an existing `~/bin/termux-url-opener` and explains how to use the fallback if that hook belongs to another app. It does not take over an existing share workflow. For custom configuration locations, export `MEDIAHUB_CONFIG_DIR` in your share-launch environment.
+
+### Add Media Hub to the home screen
+
+Use **Add to phone** when offered, or your browser's Install/Add to Home screen menu. The manifest includes a GET share target that only fills the form; no download is queued until you submit it. Direct appearance in Android's share sheet depends on the browser and installation mode, particularly for localhost apps. Use the Termux bridge when direct sharing is unavailable.
+
+The service worker never caches session pages, APIs or media. It displays an offline explanation if the service is stopped, keeping the shared URL available for a retry. Local-only hosting still applies.
+
+### Installation reliability
+
+The installer now waits for runit's supervision FIFO before enabling either the app or updater, avoiding the initial `unable to open supervise/ok` race. It also checks that FFmpeg actually executes and reports `pkg upgrade` guidance for broken native libraries. The existing saved port and admin registration are preserved.
