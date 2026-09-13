@@ -2,7 +2,7 @@ import pytest
 from yt_dlp import YoutubeDL
 from yt_dlp.extractor.twitter import TwitterIE
 from mediahub.app import media_url, create_app
-from mediahub.worker import command
+from mediahub.worker import command, friendly_error, x_cookie_path
 
 
 @pytest.mark.parametrize('url', [
@@ -72,3 +72,23 @@ def test_x_syndication_fallback_argument(tmp_path):
     url = media_url('https://x.com/creator/status/1234567890123456789')
     args = command({'url': url, 'kind': 'video', 'quality': '720'}, tmp_path, 'syndication')
     assert args[args.index('--extractor-args') + 1] == 'twitter:api=syndication'
+
+
+def test_x_cookie_fallback_argument(tmp_path):
+    url = media_url('https://x.com/creator/status/1234567890123456789')
+    cookies = tmp_path / 'x-cookies.txt'
+    cookies.write_text('# Netscape HTTP Cookie File\n')
+    args = command({'url': url, 'kind': 'video', 'quality': '720'}, tmp_path, cookies_path=cookies)
+    assert args[args.index('--cookies') + 1] == str(cookies)
+
+
+def test_x_cookie_path_override(tmp_path, monkeypatch):
+    cookies = tmp_path / 'cookies.txt'
+    cookies.write_text('# Netscape HTTP Cookie File\n')
+    monkeypatch.setenv('MEDIAHUB_X_COOKIES', str(cookies))
+    assert x_cookie_path() == cookies
+
+
+def test_x_no_video_error_points_to_cookie_fallback():
+    message = friendly_error('There is no video in this post', is_x=True, cookies_available=False)
+    assert 'x-cookies.txt' in message
