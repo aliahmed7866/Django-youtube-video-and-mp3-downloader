@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 from flask import Flask, abort, jsonify, render_template, request, send_file, session
 from .store import Store
 from .links import extract_shared_link
+from .editor import install_editor
 
 
 def youtube_url(raw):
@@ -141,8 +142,14 @@ def create_app(data_dir=None):
         with store.connect() as db:
             db.execute('SELECT 1')
         worker = app.extensions.get('worker')
-        healthy = bool(worker and worker.thread.is_alive())
-        return jsonify(ok=healthy, service='mediahub', database='ready', worker='running' if healthy else 'stopped', ffmpeg=bool(shutil.which('ffmpeg')), node=bool(shutil.which('node'))), 200 if healthy else 503
+        downloading = bool(worker and worker.thread.is_alive())
+        editor = app.extensions.get('editor')
+        editing = bool(editor and editor.thread.is_alive())
+        healthy = downloading and editing
+        return jsonify(ok=healthy, service='mediahub', database='ready',
+                       worker='running' if downloading else 'stopped',
+                       editor_worker='running' if editing else 'stopped',
+                       ffmpeg=bool(shutil.which('ffmpeg')), node=bool(shutil.which('node'))), 200 if healthy else 503
 
     @app.get('/api/jobs')
     def jobs():
@@ -223,4 +230,5 @@ def create_app(data_dir=None):
             db.execute('DELETE FROM jobs WHERE id=?', (ident,))
         return '', 204
 
+    install_editor(app, root)
     return app
