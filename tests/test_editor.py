@@ -59,9 +59,9 @@ def wait_job(editor, ident):
 
 
 @pytest.mark.parametrize('music,shape,fast,slow,dimensions,duration', [
-    (False, 'portrait', 2, .5, (480, 852), 2.5),
-    (True, 'landscape', 4, .25, (852, 480), 4.25),
-    (True, 'square', 1, 1, (480, 480), 2),
+    (False, 'portrait', 2, .5, (1080, 1920), 2.5),
+    (True, 'landscape', 4, .25, (1920, 1080), 4.25),
+    (True, 'square', 1, 1, (1080, 1080), 2),
 ])
 def test_real_export_trim_speed_silence_music_and_download(setup, media, music, shape, fast, slow, dimensions, duration):
     editor, client, headers = setup
@@ -69,7 +69,7 @@ def test_real_export_trim_speed_silence_music_and_download(setup, media, music, 
     blue = upload(setup, media / 'blue.mp4')
     body = {'clips': [dict(asset_id=red['id'], start=.5, end=1.5, speed=fast, volume=.5),
                       dict(asset_id=blue['id'], start=.25, end=1.25, speed=slow, volume=0)],
-            'resolution': '480', 'shape': shape}
+            'profile': 'instagram', 'allow_lossy': True, 'shape': shape}
     if music:
         body['music_id'] = upload(setup, media / 'music.wav', 'audio')['id']
     response = client.post('/api/editor/exports', json=body, headers=headers)
@@ -104,7 +104,7 @@ def test_real_export_trim_speed_silence_music_and_download(setup, media, music, 
     response = client.get(f'/api/editor/exports/{ident}/file')
     assert response.status_code == 200 and 'attachment' in response.headers['Content-Disposition']
     assert client.get(f'/api/editor/exports/{ident}/file?play=1', headers={'Range': 'bytes=0-99'}).status_code == 206
-    assert not list(path.parent.glob('[0-9]*.mp4'))
+    assert not list(path.parent.glob('[0-9]*.mkv'))
     assert client.delete(f'/api/editor/exports/{ident}', headers=headers).status_code == 204
     assert not path.exists()
     assert client.delete(f"/api/editor/assets/{red['id']}", headers=headers).status_code == 204

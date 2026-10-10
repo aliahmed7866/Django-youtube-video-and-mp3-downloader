@@ -44,9 +44,25 @@ def probe(path, kind):
         audios = [s for s in data['streams'] if s['codec_type'] == 'audio']
         stream = (videos if kind == 'video' else audios)[0]
         duration = number(stream.get('duration', data['format'].get('duration')), .05, 86400, 'Duration')
+        video = videos[0] if videos else {}
+        audio = audios[0] if audios else {}
+        rotation = next((s.get('rotation', 0) for s in video.get('side_data_list', [])
+                         if 'rotation' in s), 0)
         return dict(duration=duration, width=stream.get('width', 0), height=stream.get('height', 0),
                     video_index=videos[0]['index'] if videos else None,
-                    audio_index=audios[0]['index'] if audios else None, has_audio=bool(audios))
+                    audio_index=audios[0]['index'] if audios else None, has_audio=bool(audios),
+                    pixel_format=video.get('pix_fmt'), rotation=rotation,
+                    frame_rate=video.get('avg_frame_rate', '0/1'),
+                    sar=video.get('sample_aspect_ratio', '1:1'),
+                    color_range=video.get('color_range', 'unknown'),
+                    color_space=video.get('color_space', 'unknown'),
+                    color_transfer=video.get('color_transfer', 'unknown'),
+                    color_primaries=video.get('color_primaries', 'unknown'),
+                    sample_rate=int(audio.get('sample_rate', 48000)), channels=audio.get('channels', 2),
+                    channel_layout=audio.get('channel_layout') or {1: 'mono', 2: 'stereo'}.get(audio.get('channels'), ''),
+                    hdr=video.get('color_transfer') in ('smpte2084', 'arib-std-b67')
+                    or any('DOVI' in s.get('side_data_type', '') or 'Mastering display' in s.get('side_data_type', '')
+                           for s in video.get('side_data_list', [])))
     except FileNotFoundError:
         raise ValueError('Install FFmpeg in Termux: pkg install ffmpeg') from None
     except (subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError):
@@ -62,6 +78,23 @@ def tempo(speed):
         filters.append('atempo=2')
         speed /= 2
     return ','.join(filters + [f'atempo={speed:g}'])
+
+
+def frame_rate(source):
+    try:
+        a, b = source['frame_rate'].split('/')
+        rate = float(a) / float(b)
+        return rate if math.isfinite(rate) and rate > 0 else 60
+    except (ValueError, ZeroDivisionError, KeyError):
+        return 60
+
+
+def bytes_per_pixel(pixel_format):
+    # Native sample planes; 10/12/16-bit samples occupy two bytes in decoded frames.
+    for name, factor in [('yuv420p', 1.5), ('yuv422p', 2), ('yuv444p', 3), ('gbrp', 3)]:
+        if pixel_format.startswith(name):
+            return factor * (1 if pixel_format == name else 2)
+    return 8  # Conservative fallback for alpha/RGB/other formats.
 
 
 class Cancelled(Exception):
@@ -126,16 +159,24 @@ class Editor:
     def validate(self, body):
         if not isinstance(body, dict) or not isinstance(body.get('clips'), list) or not 1 <= len(body['clips']) <= 50:
             raise ValueError('Add between 1 and 50 clips.')
-        resolution, shape = body.get('resolution', '720'), body.get('shape', 'landscape')
-        if resolution not in ('480', '720', '1080') or shape not in ('landscape', 'portrait', 'square'):
-            raise ValueError('Choose a valid export size and shape.')
+        profile = body.get('profile', 'lossless')
+        if profile not in ('lossless', 'instagram'):
+            raise ValueError('Choose Lossless master or Instagram MP4.')
+        if profile == 'instagram' and body.get('allow_lossy') is not True:
+            raise ValueError('Instagram MP4 uses lossy compression. Confirm that choice, or export a lossless master.')
+        shape = body.get('shape', 'portrait')
+        if shape not in ('landscape', 'portrait', 'square', 'feed'):
+            raise ValueError('Choose a valid frame shape.')
         clips = []
+        sources = []
         for clip in body['clips']:
             if not isinstance(clip, dict):
                 raise ValueError('Invalid clip.')
             asset = self.asset(clip.get('asset_id'))
             if asset['kind'] != 'video':
                 raise ValueError('Timeline clips must be videos.')
+            # Re-probe also upgrades assets imported by older editor versions.
+            sources.append(probe(self.asset_path(asset['id']), 'video'))
             start = number(clip.get('start', 0), 0, asset['duration'], 'Start')
             end = number(clip.get('end', asset['duration']), 0, asset['duration'], 'End')
             if end - start < .05:
@@ -149,7 +190,27 @@ class Editor:
         music_id = body.get('music_id') or None
         if music_id and self.asset(music_id)['kind'] != 'audio':
             raise ValueError('Choose an audio file for background music.')
-        return dict(clips=clips, resolution=resolution, shape=shape, duration=duration, music_id=music_id,
+        if any(s['hdr'] for s in sources):
+            raise ValueError('HDR footage needs color-managed handling. This editor currently accepts SDR footage only; it will not silently flatten HDR colors.')
+        native = sources[0]
+        if not native['pixel_format']:
+            raise ValueError('Cannot determine the source pixel format safely. Choose another video.')
+        audio_sources = [s for s in sources if s['has_audio']]
+        if music_id:
+            audio_sources.append(probe(self.asset_path(music_id), 'audio'))
+        audio = audio_sources[0] if audio_sources else dict(sample_rate=48000, channels=2, channel_layout='stereo')
+        if profile == 'lossless':
+            keys = ('width', 'height', 'rotation', 'pixel_format', 'sar', 'color_range',
+                    'color_space', 'color_transfer', 'color_primaries')
+            if any(any(s[k] != native[k] for k in keys) for s in sources):
+                raise ValueError('Lossless master needs clips with matching dimensions, orientation, pixel format and color settings. Export them separately or explicitly choose Instagram MP4 to resize/convert.')
+            if native['rotation'] not in (0, 90, -90, 180, -180, 270, -270):
+                raise ValueError('This rotation would resample pixels. Use footage with a right-angle rotation for a lossless master.')
+            if any((s['sample_rate'], s['channels'], s['channel_layout']) !=
+                   (audio['sample_rate'], audio['channels'], audio['channel_layout']) for s in audio_sources):
+                raise ValueError('Lossless master needs matching audio sample rates and channel layouts; export separately or choose Instagram MP4.')
+        return dict(clips=clips, profile=profile, resolution='1080', shape=shape, duration=duration, music_id=music_id,
+                    native=native, audio=audio, fps=60 if any(frame_rate(s) > 30.1 for s in sources) else 30,
                     music_volume=number(body.get('music_volume', .3), 0, 2, 'Music volume'))
 
     def enqueue(self, body):
@@ -157,9 +218,21 @@ class Editor:
             raise ValueError('Install FFmpeg in Termux: pkg install ffmpeg')
         with self.lock:
             recipe = self.validate(body)
-            # Intermediate segments plus final MP4 need room beyond imported originals.
-            if shutil.disk_usage(self.root).free < RESERVE + recipe['duration'] * 2_000_000:
-                raise ValueError('Not enough free space for this export. Remove old exports or shorten the timeline.')
+            # Lossless output can approach raw size. Include segments and final file.
+            native = recipe['native']
+            if recipe['profile'] == 'lossless':
+                pixels = native['width'] * native['height']
+                raw_bytes = 0
+                for clip in recipe['clips']:
+                    source = probe(self.asset_path(clip['asset_id']), 'video')
+                    raw_bytes += pixels * bytes_per_pixel(source['pixel_format']) * frame_rate(source) * (clip['end'] - clip['start'])
+                needed = 2 * raw_bytes + recipe['duration'] * recipe['audio']['sample_rate'] * recipe['audio']['channels'] * 16
+            else:
+                needed = recipe['duration'] * 8_000_000
+            free = shutil.disk_usage(self.root).free
+            if free < RESERVE + needed:
+                raise ValueError(f'This export reserves about {(RESERVE + needed) / 1024**3:.1f} GB including temporary files; '
+                                 f'{free / 1024**3:.1f} GB is free. Free storage or shorten the timeline.')
             ident = uuid.uuid4().hex
             with self.connect() as db:
                 db.execute('BEGIN IMMEDIATE')
@@ -171,6 +244,9 @@ class Editor:
 
     def start(self):
         with self.connect() as db:
+            for row in db.execute("SELECT id,recipe FROM exports WHERE status='queued'").fetchall():
+                if 'profile' not in json.loads(row['recipe']):
+                    db.execute("UPDATE exports SET status='failed', error='Quality settings changed. Select an export profile and export your saved timeline again.' WHERE id=?", (row['id'],))
             db.execute("UPDATE exports SET status='failed', error='Export interrupted by a service restart. Export your saved timeline again.' WHERE status='rendering'")
             db.execute("UPDATE exports SET status='cancelled' WHERE status='cancelling'")
             settled = db.execute("SELECT id FROM exports WHERE status IN ('failed','cancelled')").fetchall()
@@ -223,7 +299,7 @@ class Editor:
                             pass
                     self.stop.wait(.25)
                 if proc.returncode:
-                    raise RuntimeError('FFmpeg could not process this media. Try another clip or 480p. Details are in the export log.')
+                    raise RuntimeError('FFmpeg could not export this media with the selected quality. Details are in the export log.')
             finally:
                 if proc.poll() is None:
                     proc.terminate()
@@ -240,9 +316,15 @@ class Editor:
         try:
             directory.mkdir(exist_ok=True)
             recipe = json.loads(job['recipe'])
-            side = int(recipe['resolution'])
-            width, height = {'landscape': (side * 16 // 9 // 2 * 2, side),
-                             'portrait': (side, side * 16 // 9 // 2 * 2), 'square': (side, side)}[recipe['shape']]
+            lossless = recipe['profile'] == 'lossless'
+            extension = 'mkv' if lossless else 'mp4'
+            width, height = {'landscape': (1920, 1080), 'portrait': (1080, 1920),
+                             'square': (1080, 1080), 'feed': (1080, 1350)}[recipe['shape']]
+            sample_rate = recipe['audio']['sample_rate'] if lossless else 48000
+            channels = recipe['audio']['channels'] if lossless else 2
+            layout = recipe['audio']['channel_layout'] or f'{channels}c'
+            if not lossless:
+                layout = 'stereo'
             elapsed = 0
             for i, clip in enumerate(recipe['clips']):
                 asset = self.asset(clip['asset_id'])
@@ -250,38 +332,65 @@ class Editor:
                 args = ['-threads', '2', '-ss', str(clip['start']), *INPUT_OPTIONS,
                         '-i', str(self.asset_path(asset['id']))]
                 vfilter = (f"[0:{asset['video_index']}]trim=duration={clip['end'] - clip['start']},"
-                           f"setpts=(PTS-STARTPTS)/{clip['speed']},"
-                           f'scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,'
-                           f'pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,'
-                           f'format=yuv420p,tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration}[v]')
+                           f"setpts=(PTS-STARTPTS)/{clip['speed']}")
+                if not lossless:
+                    vfilter += (f',scale=iw*sar:ih,setsar=1,scale={width}:{height}:flags=lanczos:'
+                                f'force_original_aspect_ratio=decrease:force_divisible_by=2,'
+                                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps={recipe['fps']},"
+                                f'format=yuv420p,tpad=stop_mode=clone:stop_duration={duration},trim=duration={duration}')
+                vfilter += '[v]'
                 if asset['has_audio'] and clip['volume']:
-                    afilter = (f"[0:{asset['audio_index']}]atrim=duration={clip['end'] - clip['start']},"
-                               f"asetpts=PTS-STARTPTS,{tempo(clip['speed'])},volume={clip['volume']},"
-                               f'aresample=48000,apad,atrim=duration={duration}[a]')
+                    effects = []
+                    if clip['speed'] != 1:
+                        effects.append(tempo(clip['speed']))
+                    if clip['volume'] != 1:
+                        effects.append(f"volume={clip['volume']}:precision=double")
+                    if not lossless:
+                        effects.append('aresample=48000')
+                    effect = ','.join(effects)
+                    afilter = (f"[0:{asset['audio_index']}]aresample=osf=dbl,atrim=duration={clip['end'] - clip['start']},"
+                               'asetpts=PTS-STARTPTS,' + (effect + ',' if effect else '') +
+                               f'apad,atrim=duration={duration}[a]')
                 else:
-                    afilter = f'anullsrc=r=48000:cl=stereo,atrim=duration={duration}[a]'
+                    afilter = f'anullsrc=r={sample_rate}:cl={layout},aresample=osf=dbl,atrim=duration={duration}[a]'
                 args += ['-filter_complex', vfilter + ';' + afilter, '-map', '[v]', '-map', '[a]',
-                         '-t', str(duration), '-c:v', 'libx264', '-threads', '2', '-preset', 'veryfast',
-                         '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-ac', '2',
-                         '-video_track_timescale', '90000', '-map_metadata', '-1', str(directory / f'{i}.mp4')]
+                         '-t', str(duration), '-threads', '2']
+                if lossless:
+                    # Enforce the native pixel format: fail instead of silently reducing bit depth/chroma.
+                    args += ['-c:v', 'ffv1', '-level', '3', '-slicecrc', '1',
+                             '-pix_fmt', '+' + recipe['native']['pixel_format'], '-fps_mode', 'passthrough',
+                             '-enc_time_base', '1:1000000']
+                    for key, option in [('color_range', '-color_range'), ('color_space', '-colorspace'),
+                                        ('color_transfer', '-color_trc'), ('color_primaries', '-color_primaries')]:
+                        if recipe['native'][key] != 'unknown':
+                            args += [option, recipe['native'][key]]
+                else:
+                    args += ['-c:v', 'libx264', '-preset', 'medium', '-crf', '16',
+                             '-profile:v', 'high', '-maxrate', '20M', '-bufsize', '40M']
+                # Intermediate audio is uncompressed, so music never causes a second AAC generation.
+                args += ['-c:a', 'pcm_f64le', '-ar', str(sample_rate), '-ac', str(channels),
+                         '-map_metadata', '-1', str(directory / f'{i}.mkv')]
                 self.execute(ident, args, directory, duration, 90 * elapsed / recipe['duration'],
                              90 * duration / recipe['duration'])
                 elapsed += duration
             # Only internally generated basenames enter the concat list.
             (directory / 'clips.txt').write_text(''.join(
-                f"file '{i}.mp4'\nduration {(c['end'] - c['start']) / c['speed']:.9f}\n"
+                f"file '{i}.mkv'\nduration {(c['end'] - c['start']) / c['speed']:.9f}\n"
                 for i, c in enumerate(recipe['clips'])))
             args = ['-f', 'concat', '-safe', '1', '-protocol_whitelist', 'file,pipe', '-i', str(directory / 'clips.txt')]
             if recipe['music_id']:
                 music = self.asset(recipe['music_id'])
                 args += ['-stream_loop', '-1', *INPUT_OPTIONS, '-i', str(self.asset_path(music['id'])),
-                         '-filter_complex', f"[1:{music['audio_index']}]volume={recipe['music_volume']}[music];"
+                         '-filter_complex', f"[1:{music['audio_index']}]volume={recipe['music_volume']}:precision=double[music];"
                          '[0:a][music]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95:latency=1[a]',
-                         '-map', '0:v:0', '-map', '[a]', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k']
+                         '-map', '0:v:0', '-map', '[a]', '-c:v', 'copy']
             else:
-                args += ['-map', '0:v:0', '-map', '0:a:0', '-c', 'copy']
-            args += ['-t', str(recipe['duration']), '-map_metadata', '-1', '-movflags', '+faststart',
-                     str(directory / 'result.mp4')]
+                args += ['-map', '0:v:0', '-map', '0:a:0', '-c:v', 'copy']
+            args += ['-c:a', 'pcm_f64le'] if lossless else ['-c:a', 'aac', '-b:a', '256k']
+            args += ['-ar', str(sample_rate), '-ac', str(channels), '-t', str(recipe['duration']), '-map_metadata', '-1']
+            if not lossless:
+                args += ['-movflags', '+faststart']
+            args += [str(directory / f'result.{extension}')]
             self.execute(ident, args, directory, recipe['duration'], 90, 10)
             self.check(ident)
             status = 'complete'
@@ -296,7 +405,7 @@ class Editor:
                     status = 'cancelled'
                 if directory.exists():
                     for path in directory.iterdir():
-                        if path.name != 'ffmpeg.log' and not (status == 'complete' and path.name == 'result.mp4'):
+                        if path.name != 'ffmpeg.log' and not (status == 'complete' and path.name == f'result.{extension}'):
                             path.unlink(missing_ok=True)
                 self.update(ident, status=status, error=error,
                             progress=100 if status == 'complete' else self.job(ident)['progress'])
@@ -326,7 +435,9 @@ def install_editor(app, root):
             assets = [json.loads(r[0]) for r in db.execute('SELECT metadata FROM assets ORDER BY rowid')]
             jobs = [dict(r) for r in db.execute('SELECT * FROM exports ORDER BY created DESC')]
         for job in jobs:
-            job.pop('recipe')
+            recipe = json.loads(job.pop('recipe'))
+            job['profile'] = recipe.get('profile', 'legacy')
+            job['extension'] = 'mkv' if job['profile'] == 'lossless' else 'mp4'
         return jsonify(assets=assets, jobs=jobs, free_bytes=shutil.disk_usage(root).free,
                        ready=bool(shutil.which('ffmpeg') and shutil.which('ffprobe')), max_upload=UPLOAD_LIMIT)
 
@@ -402,9 +513,12 @@ def install_editor(app, root):
         job = editor.job(ident)
         if not job or job['status'] != 'complete':
             abort(404)
-        return send_file(editor.exports / ident / 'result.mp4', mimetype='video/mp4',
+        lossless = json.loads(job['recipe']).get('profile') == 'lossless'
+        extension = 'mkv' if lossless else 'mp4'
+        return send_file(editor.exports / ident / f'result.{extension}',
+                         mimetype='video/x-matroska' if lossless else 'video/mp4',
                          as_attachment=request.args.get('play') != '1',
-                         download_name=f'Media-Hub-{ident[:8]}.mp4', conditional=True)
+                         download_name=f'Media-Hub-{ident[:8]}.{extension}', conditional=True)
 
     @bp.delete('/api/editor/exports/<ident>')
     def delete_export(ident):
