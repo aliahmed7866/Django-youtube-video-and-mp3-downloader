@@ -6,12 +6,12 @@ let clips = [], assets = [], ready = false, importing = false, playing = -1, seq
 let draft = {};
 try { draft = JSON.parse(localStorage.getItem(draftKey) || '{}') || {}; } catch (_) { /* Fresh draft. */ }
 if (Array.isArray(draft.clips)) clips = draft.clips;
-for (const id of ['shape', 'resolution', 'music-volume']) {
+for (const id of ['profile', 'shape', 'music-volume']) {
   if (draft[id] != null && [...$(id).options].some(o => o.value === draft[id])) $(id).value = draft[id];
 }
 function notice(message) { $('notice').textContent = message; }
 function save() {
-  draft = {clips, shape: $('shape').value, resolution: $('resolution').value,
+  draft = {clips, profile: $('profile').value, shape: $('shape').value,
     music: $('music').value, 'music-volume': $('music-volume').value};
   try { localStorage.setItem(draftKey, JSON.stringify(draft)); }
   catch (_) { notice('Browser storage is unavailable. Keep this page open to retain your timeline.'); }
@@ -54,7 +54,8 @@ function valid(clip) {
 function totals() {
   const duration = clips.reduce((n, c) => n + Math.max(0, (c.end - c.start) / c.speed || 0), 0);
   $('duration').textContent = `${clips.length} clip${clips.length === 1 ? '' : 's'} · ${clock(duration)}`;
-  $('export').disabled = !ready || importing || !clips.length || !clips.every(valid) || duration > 7200;
+  $('export').disabled = !ready || importing || !clips.length || !clips.every(valid) || duration > 7200 ||
+    ($('profile').value === 'instagram' && !$('allow-lossy').checked);
   $('play').disabled = !clips.length || !clips.every(valid);
   $('empty').hidden = clips.length > 0;
 }
@@ -196,11 +197,24 @@ $('clear').onclick = () => {
     stopPreview(); clips = []; save(); renderTimeline();
   }
 };
-for (const id of ['shape', 'resolution', 'music', 'music-volume']) $(id).onchange = save;
+const losslessHelp = $('quality-help').textContent;
+function qualityOptions() {
+  const lossless = $('profile').value === 'lossless';
+  $('shape').disabled = lossless;
+  $('lossy-consent').hidden = lossless;
+  $('export').textContent = lossless ? 'Export lossless master ↗' : 'Export Instagram MP4 ↗';
+  $('quality-help').textContent = lossless ? losslessHelp : 'Instagram copy: 1080p canvas, H.264 high quality, 30 fps (60 fps for higher-frame-rate sources) and AAC audio. Clips fit without cropping; resizing and frame-rate conversion may change detail/motion. Smaller sources cannot gain real detail by upscaling. This is lossy, and Instagram may recompress it again. Keep your lossless master separately.';
+  totals();
+}
+$('profile').onchange = () => { $('allow-lossy').checked = false; qualityOptions(); save(); };
+$('allow-lossy').onchange = totals;
+for (const id of ['shape', 'music', 'music-volume']) $(id).onchange = save;
+qualityOptions();
 $('export').onclick = async () => {
   $('export').disabled = true;
   try {
-    await api('/api/editor/exports', 'POST', {clips, shape: $('shape').value, resolution: $('resolution').value,
+    await api('/api/editor/exports', 'POST', {clips, shape: $('shape').value, profile: $('profile').value,
+      allow_lossy: $('allow-lossy').checked,
       music_id: $('music').value || null, music_volume: Number($('music-volume').value)});
     notice('Export queued. Keep Termux running; the download button appears when it finishes.');
     await refresh();
@@ -226,8 +240,10 @@ function renderJobs(jobs) {
       cancel.disabled = job.status === 'cancelling'; actions.append(cancel);
     } else {
       if (job.status === 'complete') {
-        const link = el('a', 'Download MP4'); link.href = `/api/editor/exports/${job.id}/file`; link.download = ''; actions.append(link);
-        actions.append(button('Preview film', () => {
+        const lossless = job.profile === 'lossless';
+        const link = el('a', lossless ? 'Download lossless MKV' : 'Download MP4'); link.href = `/api/editor/exports/${job.id}/file`; link.download = ''; actions.append(link);
+        if (lossless) info.append(el('p', 'Lossless master · native frames · open in a compatible player'));
+        if (!lossless) actions.append(button('Preview film', () => {
           stopPreview(); const video = $('preview'); video.onloadedmetadata = null;
           video.src = `/api/editor/exports/${job.id}/file?play=1`; video.playbackRate = 1; video.volume = 1; video.muted = false;
           video.play().catch(() => {}); $('preview-label').textContent = 'Finished film · exported framing and audio'; video.scrollIntoView({behavior: 'smooth', block: 'center'});

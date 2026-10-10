@@ -122,66 +122,80 @@ MP4 and MP3 use the existing queue, playback, retries and phone sharing. X/Twitt
 
 ## Local video editor
 
-Open **Media Hub → Video editor**, or visit `http://127.0.0.1:8083/editor`
-(use your configured Media Hub port). It uses the same service and Admin Hub
-controls as the downloader; no new service, account, API, or subscription is needed.
+Open **Media Hub → Video editor** or `http://127.0.0.1:8083/editor` (use your
+configured port). Local videos and music stay on the device running Termux. No
+account, external API or paid service is used. Imported copies leave your originals
+untouched. Reorder or reuse clips, trim start/end, set 0.25×–4× speed, adjust volume
+or mute, add looping background music, preview the timeline, then export/download.
 
-- Import videos from your device with the Android/browser file picker; add multiple
-  files, reorder with the arrow buttons, or add the same imported clip twice.
-- Trim with start/end times in seconds, change speed from **0.25× to 4×**, and set
-  each clip's volume from mute to 200%. Audio speed changes preserve pitch.
-- Choose landscape, portrait, or square output at 480p, 720p, or 1080p. Mixed sizes
-  fit within the frame with padding, without cropping. Phone rotation metadata is
-  handled by FFmpeg during export.
-- Add local music, choose its volume, and mix it with the clips. Music loops to the
-  end; mute each clip to use music alone.
-- Preview individual clips or the sequence before export. This quick preview uses
-  original browser-playable files, trim points and speed; final framing, music and
-  volume boosts are visible/audible in the finished MP4 preview.
-- Export to an MP4 with H.264 video and AAC stereo audio at 30 fps, then preview or
-  download it. Export progress and cancellation are available on the page.
+### Quality choices
 
-The editor copies imports into `MEDIAHUB_DATA_DIR/editor` (normally
-`~/.local/share/mediahub/editor`). Your original files are never edited or deleted.
-Uploads and processing stay on the same device when using the local Termux URL.
-Imports and completed exports persist until you delete their copies on the page.
-The timeline saves in this browser's local storage; clearing browser/site storage
-removes that draft. Export recipes and job status are also stored on disk.
+**Lossless master is the default.** It uses FFV1 video with uncompressed 64-bit
+floating-point PCM audio in MKV. There is no resizing, chroma reduction, bit-depth
+reduction or forced frame-rate conversion. All retained source frames are encoded;
+speed changes modify their timestamps. Exact decoded pixel hashes are tested for
+8-bit, 10-bit and 4:4:4 sources, including 60 fps footage and speed changes. Unchanged
+PCM audio is compared sample-for-sample. Trimming removes content; speed, volume
+and music edits intentionally alter the output. Lossless encoding does not mean
+an edited file is byte-identical to its original compressed source.
 
-**Limits and practical notes:** up to 2 GB per imported file, 50 timeline clips,
-two hours per output, and three active/queued exports. Only one export runs at a
-time, with limited FFmpeg threads to reduce phone memory pressure. A conservative
-free-space check reserves room for temporary segments and the final MP4. Imported
-files, temporary upload buffering, and exports require additional device storage.
-Start with 720p or 480p on your phone. Keep Termux running; Android can stop long
-jobs if its battery restrictions apply. After a service restart, an interrupted
-export is marked failed with instructions to export the saved timeline again;
-queued exports remain queued. Temporary segments are cleaned after completion,
-cancellation, or failure. A clip unsupported by your browser may still export if
-FFmpeg can decode it. HDR-to-SDR tone mapping is not provided in this first version.
+To avoid silent conversions, a lossless timeline requires matching source dimensions,
+orientation, pixel format, sample aspect ratio and color settings. Audio sources
+(including music) need matching sample rates, channel counts and layouts. Export
+incompatible clips separately, or explicitly choose the Instagram copy. Unsupported
+native pixel formats fail instead of falling back to a lower-quality format. HDR
+(including PQ, HLG and detected Dolby Vision/mastering metadata) is rejected in both
+profiles until color-managed output is supported. Keep the original HDR footage.
+Lossless MKV files need a compatible player, such as VLC; direct Instagram upload
+and browser preview are not offered for this archival format.
 
-To install an update **after the editor PR is merged**:
+**Instagram MP4 is a separate, explicitly lossy choice.** A confirmation checkbox is
+required before the server will queue it. The canvas choices are Reels/Stories
+1080×1920, Feed 1080×1350, square 1080×1080, or landscape 1920×1080. Sources fit
+without cropping, using Lanczos scaling and padding. Output is H.264 High profile,
+CRF 16, medium preset, with a 20 Mbps maximum rate / 40 Mbps buffer and AAC stereo
+256 kbps / 48 kHz. It uses 30 fps, or 60 fps when source frame rates exceed 30 fps.
+This preset prioritizes quality but is **not lossless**: resizing, conversion to
+8-bit 4:2:0, frame-rate normalization and H.264/AAC encoding can change the result.
+Upscaling cannot create source detail. Instagram can recompress uploaded videos;
+no export preset can guarantee that Instagram preserves the original quality.
+
+Each segment's audio remains uncompressed until the final export, including when
+mixing music, avoiding a second AAC generation. Encoded video segments are joined
+without another video encode. Keep a lossless master and make a separate Instagram
+copy for sharing. The source-backed design references are the
+[FFV1 specification](https://github.com/FFmpeg/FFV1),
+[FFmpeg filter documentation](https://ffmpeg.org/ffmpeg-filters.html), and
+[Meta's description of Instagram video encodes](https://engineering.fb.com/2022/11/04/video-engineering/instagram-video-processing-encoding-reduction/).
+
+### Storage, preview and updates
+
+Imports and completed exports live in `MEDIAHUB_DATA_DIR/editor` (normally
+`~/.local/share/mediahub/editor`) until deleted through the page. The timeline saves
+in this browser's local storage; clearing site storage removes that draft. Export
+recipes and status persist on disk. Quick preview uses original browser-playable
+clips, trim points and speed; final framing, music and volume boosts are applied
+on export. Finished Instagram MP4s can be previewed in the page.
+
+Limits: 2 GB per imported file, 50 timeline clips, two hours per output, three
+active/queued exports, and one running export. Lossless masters can be very large:
+a conservative disk-space check allows for native decoded video, audio,
+intermediate segments and the final file. The worker also checks remaining free
+space while processing. Source copies and temporary upload buffering need extra
+storage. Keep Termux running and allow time for high-quality encoding on a phone.
+Interrupted exports are marked failed after a restart; export the saved draft again.
+Queued jobs from the older compressed-only editor are marked failed on upgrade so
+that a quality profile must be selected explicitly. Existing completed MP4 downloads
+remain available. Intermediate files are cleaned after completion/failure/cancellation.
+
+After merging an editor update, run from your Media Hub checkout:
 
 ```sh
 cd ~/Django-youtube-video-and-mp3-downloader
 bash termux/update.sh
 ```
 
-Use your actual checkout directory if different. The updater fast-forwards `master`,
-installs dependencies, refreshes the Admin Hub entry, and restarts the service. The
-existing automatic deployment watcher can also apply merged updates. FFmpeg is
-already included in the Termux installer (`pkg install ffmpeg` repairs a missing
-installation). `/health` reports the downloader and editor worker status.
-
-Editor tests include real FFmpeg imports and exports (trim, speed, mixed aspect
-ratios, audio, silent clips and looping music), downloaded-file byte ranges,
-cancellation of a running process, restart recovery, queue limits, bad media,
-request limits, CSRF/Host checks, path isolation and storage checks. Run:
-
-```sh
-python -m pytest -q
-```
-
-Install FFmpeg/ffprobe first to run the media integration tests; CI installs them.
-The filter pipeline follows the [FFmpeg filter documentation](https://ffmpeg.org/ffmpeg-filters.html)
-for `setpts`, `atempo`, `apad`, scaling and audio mixing.
+The existing deployment watcher can also apply merged updates. FFmpeg is installed
+by the Termux setup (`pkg install ffmpeg` repairs a missing installation). `/health`
+reports the downloader and editor worker status. Run `python -m pytest -q` with
+FFmpeg/ffprobe installed for real media integration tests; CI installs them.
