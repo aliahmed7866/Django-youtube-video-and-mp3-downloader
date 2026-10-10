@@ -15,7 +15,7 @@ def register(registry, example, port=8083):
         raise ValueError(f'Port {port} already belongs to another app. Set MEDIAHUB_PORT.')
     root = Path(__file__).resolve().parents[1]
     existing = next((x for x in payload['apps'] if x.get('id') == 'mediahub'), {})
-    item = {**existing, 'id':'mediahub','name':'Media Hub','description':'YouTube, TikTok, Instagram and X/Twitter videos and audio',
+    item = {**existing, 'id':'mediahub','name':'Media Hub','description':'Video downloads and local video editor: trim, combine, speed and export',
             'service':'mediahub',
             'working_dir':str(root),
             'process_match':'^' + re.escape(str(root / '.venv/bin/python')) + r'[[:space:]]+run[.]py([[:space:]]|$)',

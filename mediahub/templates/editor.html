@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ csrf }}"><meta name="theme-color" content="#10191b">
+  <title>Video editor · Media Hub</title>
+  <link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/editor.css">
+  <script defer src="/static/editor.js"></script>
+</head>
+<body><div class="shell">
+<header><a class="brand" href="/">m<span>↘</span><strong>Media Hub</strong></a><a class="back" href="/">← Collection</a></header>
+<main>
+  <div class="intro"><p class="eyebrow">LOCAL VIDEO STUDIO</p><h1>Your moments.<br><em>Your cut.</em></h1><p class="subtitle">Trim, rearrange, slow things down. Make one film.<br>Processed in Termux on this device. No accounts or paid APIs.</p></div>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <section class="composer" aria-labelledby="import-title">
+    <div class="section-label"><span class="step">01</span><h2 id="import-title">Bring your clips</h2></div>
+    <div class="import-row"><label class="file-button">+ Add videos<input id="videos" type="file" accept="video/*,.mkv,.mov" multiple></label><label class="file-button secondary">♪ Add music<input id="audio" type="file" accept="audio/*"></label><p id="storage" class="hint"></p></div>
+    <p class="hint">Local files are copied into Media Hub. Originals stay untouched. Up to 2 GB per file. Browser codec support varies; a clip that cannot preview may still export.</p>
+    <progress id="upload-progress" max="100" value="0" hidden aria-label="Import progress"></progress><p id="upload-status" role="status"></p>
+    <details><summary>Imported files <span id="asset-count">0</span></summary><div id="assets"></div></details>
+  </section>
+  <div class="edit-layout">
+    <section class="timeline-section" aria-labelledby="timeline-title"><div class="collection-heading"><div><p class="eyebrow">02 / BUILD YOUR STORY</p><h2 id="timeline-title">Your timeline</h2></div><button id="clear" class="secondary" type="button">Clear timeline</button></div>
+      <p class="hint">Times are seconds in the original clip. Use ↑ ↓ to reorder. A 0.5× clip plays twice as long.</p><div id="timeline"></div><p id="empty">Add a video to begin. Your timeline saves automatically in this browser.</p>
+    </section>
+    <aside class="preview-panel"><h2>Preview</h2><video id="preview" controls playsinline preload="metadata"></video><p id="preview-label" class="hint">Select a clip, or play the timeline.</p><div class="import-row"><button id="play" class="secondary" type="button">▶ Play timeline</button><button id="stop" class="secondary" type="button">Stop</button></div><p class="hint">Quick preview uses original clips, trim points and speed. Background music, framing and volume boosts are applied in the export. Preview the finished MP4 below.</p></aside>
+  </div>
+  <section class="composer" aria-labelledby="export-title"><div class="section-label"><span class="step">03</span><h2 id="export-title">Make your film</h2></div>
+    <div class="export-options"><label>Frame<select id="shape"><option value="landscape">Landscape · 16:9</option><option value="portrait">Portrait · 9:16</option><option value="square">Square · 1:1</option></select></label><label>Resolution<select id="resolution"><option value="480">480p · Faster export</option><option value="720" selected>720p · HD</option><option value="1080">1080p · Full HD</option></select></label><label>Background music<select id="music"><option value="">None</option></select></label><label>Music volume<select id="music-volume"><option value="0.15">15% · Soft</option><option value="0.3" selected>30% · Background</option><option value="0.6">60%</option><option value="1">100%</option></select></label></div>
+    <p class="hint">Clips fit inside the frame without cropping. Music repeats to the end. Set each clip's volume to 0% to replace its audio with music. Exports use MP4 (H.264 + AAC), 30 fps.</p>
+    <div class="export-bar"><p id="duration">0 clips · 0:00</p><button id="export" class="primary" disabled>Export MP4 ↗</button></div><p class="hint">Keep Termux running during export. Long or 1080p projects take more time and storage. One export runs at a time.</p>
+  </section>
+  <section class="collection" aria-labelledby="exports-title"><div class="collection-heading"><h2 id="exports-title">Your exports</h2><span class="hint">Saved on this device</span></div><p id="connection" role="status"></p><div id="exports"></div></section>
+</main><footer><span>MEDIA HUB / STUDIO</span><span>On your device. At your pace.</span></footer>
+</div></body></html>

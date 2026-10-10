@@ -119,3 +119,69 @@ Instagram may publish MP4 video and M4A audio as separate streams. Media Hub now
 Paste a public video-post URL from `x.com` or `twitter.com`, including mobile links and shared captions. Tracking parameters are removed and both domains normalize to the same post URL for duplicate detection. A post downloads its first video; a link ending in `/video/2` (or another positive index) preserves that media selection.
 
 MP4 and MP3 use the existing queue, playback, retries and phone sharing. X/Twitter has its own collection filter. MP4 quality uses the shorter-edge ceiling, supports split or combined streams, and accepts silent MP4 clips; silent clips cannot produce MP3 audio. Profiles, search, Spaces, photo links and `t.co` redirects are excluded; copy the original post link. Private or login-restricted posts may fail; no credentials or cookie import is added. Live X extraction still needs verification on the phone.
+
+## Local video editor
+
+Open **Media Hub → Video editor**, or visit `http://127.0.0.1:8083/editor`
+(use your configured Media Hub port). It uses the same service and Admin Hub
+controls as the downloader; no new service, account, API, or subscription is needed.
+
+- Import videos from your device with the Android/browser file picker; add multiple
+  files, reorder with the arrow buttons, or add the same imported clip twice.
+- Trim with start/end times in seconds, change speed from **0.25× to 4×**, and set
+  each clip's volume from mute to 200%. Audio speed changes preserve pitch.
+- Choose landscape, portrait, or square output at 480p, 720p, or 1080p. Mixed sizes
+  fit within the frame with padding, without cropping. Phone rotation metadata is
+  handled by FFmpeg during export.
+- Add local music, choose its volume, and mix it with the clips. Music loops to the
+  end; mute each clip to use music alone.
+- Preview individual clips or the sequence before export. This quick preview uses
+  original browser-playable files, trim points and speed; final framing, music and
+  volume boosts are visible/audible in the finished MP4 preview.
+- Export to an MP4 with H.264 video and AAC stereo audio at 30 fps, then preview or
+  download it. Export progress and cancellation are available on the page.
+
+The editor copies imports into `MEDIAHUB_DATA_DIR/editor` (normally
+`~/.local/share/mediahub/editor`). Your original files are never edited or deleted.
+Uploads and processing stay on the same device when using the local Termux URL.
+Imports and completed exports persist until you delete their copies on the page.
+The timeline saves in this browser's local storage; clearing browser/site storage
+removes that draft. Export recipes and job status are also stored on disk.
+
+**Limits and practical notes:** up to 2 GB per imported file, 50 timeline clips,
+two hours per output, and three active/queued exports. Only one export runs at a
+time, with limited FFmpeg threads to reduce phone memory pressure. A conservative
+free-space check reserves room for temporary segments and the final MP4. Imported
+files, temporary upload buffering, and exports require additional device storage.
+Start with 720p or 480p on your phone. Keep Termux running; Android can stop long
+jobs if its battery restrictions apply. After a service restart, an interrupted
+export is marked failed with instructions to export the saved timeline again;
+queued exports remain queued. Temporary segments are cleaned after completion,
+cancellation, or failure. A clip unsupported by your browser may still export if
+FFmpeg can decode it. HDR-to-SDR tone mapping is not provided in this first version.
+
+To install an update **after the editor PR is merged**:
+
+```sh
+cd ~/Django-youtube-video-and-mp3-downloader
+bash termux/update.sh
+```
+
+Use your actual checkout directory if different. The updater fast-forwards `master`,
+installs dependencies, refreshes the Admin Hub entry, and restarts the service. The
+existing automatic deployment watcher can also apply merged updates. FFmpeg is
+already included in the Termux installer (`pkg install ffmpeg` repairs a missing
+installation). `/health` reports the downloader and editor worker status.
+
+Editor tests include real FFmpeg imports and exports (trim, speed, mixed aspect
+ratios, audio, silent clips and looping music), downloaded-file byte ranges,
+cancellation of a running process, restart recovery, queue limits, bad media,
+request limits, CSRF/Host checks, path isolation and storage checks. Run:
+
+```sh
+python -m pytest -q
+```
+
+Install FFmpeg/ffprobe first to run the media integration tests; CI installs them.
+The filter pipeline follows the [FFmpeg filter documentation](https://ffmpeg.org/ffmpeg-filters.html)
+for `setpts`, `atempo`, `apad`, scaling and audio mixing.

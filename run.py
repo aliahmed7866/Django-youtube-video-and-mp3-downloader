@@ -12,10 +12,15 @@ if __name__ == '__main__':
     worker = Worker(app.extensions['store'])
     app.extensions['worker'] = worker
     worker.start()
+    editor = app.extensions['editor']
+    editor.start()
     def shutdown(signum, frame):
         worker.stop.set()
+        editor.stop.set()
         worker.thread.join(timeout=8)
+        editor.thread.join(timeout=8)
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
-    serve(app, host='127.0.0.1', port=int(os.environ.get('MEDIAHUB_PORT', '8083')), threads=4)
+    serve(app, host='127.0.0.1', port=int(os.environ.get('MEDIAHUB_PORT', '8083')), threads=4,
+          max_request_body_size=2 * 1024**3)

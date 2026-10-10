@@ -126,7 +126,10 @@ def test_health_reports_worker(setup):
     app,client,_=setup
     assert client.get('/health').status_code==503
     app.extensions['worker']=SimpleNamespace(thread=SimpleNamespace(is_alive=lambda:True))
+    assert client.get('/health').status_code == 503
+    app.extensions['editor']=SimpleNamespace(thread=SimpleNamespace(is_alive=lambda:True))
     assert client.get('/health').json['ok'] is True
+    assert client.get('/health').json['editor_worker'] == 'running'
 
 
 def test_queue_pause_persists_and_does_not_interrupt_active_job(setup):
