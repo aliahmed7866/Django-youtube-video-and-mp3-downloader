@@ -126,7 +126,33 @@ Open **Media Hub → Video editor** or `http://127.0.0.1:8083/editor` (use your
 configured port). Local videos and music stay on the device running Termux. No
 account, external API or paid service is used. Imported copies leave your originals
 untouched. Reorder or reuse clips, trim start/end, set 0.25×–4× speed, adjust volume
-or mute, add looping background music, preview the timeline, then export/download.
+or mute, layer music/voiceovers, preview the timeline, then export/download.
+
+### Layered timeline
+
+The video sequence is gapless: drag a video block to reorder it, or drag its left or
+right handle to trim or restore footage within the original source. Following
+videos and their linked audio move together. The linked audio lane shows the sound
+belonging to each video; choose **Detach audio** to mute that video and place its
+sound on an independent audio track for separate trims and movement.
+
+Add music or voiceovers to **A1, A2 or A3**. Drag a block horizontally to set when it
+starts, or vertically to change tracks. Audio on all three tracks mixes together,
+including overlaps on the same track. Edge handles trim source audio; extending a
+handle restores available source. To repeat a section, enable **Loop** in its
+controls: source in/out chooses the repeating section, and the edge handles then
+change the loop's occupied timeline length. Audio beyond the final video is omitted.
+Moving/reordering video does not move detached audio or other independent audio.
+
+Tap the ruler or move the Playhead slider to seek. Select a clip and use **Split at
+playhead**, **Duplicate**, or exact source in/out, speed, volume and position fields.
+Looped audio must have looping turned off before splitting. **Zoom**, **Fit**,
+optional edge/playhead snapping and **Undo/Redo** help with precise edits. Arrow
+keys on trim handles adjust 0.05 output seconds (Shift: 0.5); arrow keys on clip
+bodies move audio or reorder video. Ctrl/Cmd+Z undoes timeline edits outside inputs.
+Edits auto-save; undo history lasts until this page closes. Deleting an imported
+copy also removes its clips and clears undo history. This is a single video
+sequence with layered audio; visual overlays and compositing are not included.
 
 ### Quality choices
 
@@ -174,10 +200,11 @@ Imports and completed exports live in `MEDIAHUB_DATA_DIR/editor` (normally
 `~/.local/share/mediahub/editor`) until deleted through the page. The timeline saves
 in this browser's local storage; clearing site storage removes that draft. Export
 recipes and status persist on disk. Quick preview uses original browser-playable
-clips, trim points and speed; final framing, music and volume boosts are applied
-on export. Finished Instagram MP4s can be previewed in the page.
+clips, trim points, speed and the audio layers. Browser timing is approximate;
+final framing, audio limiting and volume boosts are applied on export. Finished Instagram MP4s can be previewed in the page.
 
-Limits: 2 GB per imported file, 50 timeline clips, two hours per output, three
+Limits: 2 GB per imported file, 50 video clips, 20 independent audio regions across
+three audio tracks, two hours per output, three
 active/queued exports, and one running export. Lossless masters can be very large:
 a conservative disk-space check allows for native decoded video, audio,
 intermediate segments and the final file. The worker also checks remaining free
@@ -199,3 +226,4 @@ The existing deployment watcher can also apply merged updates. FFmpeg is install
 by the Termux setup (`pkg install ffmpeg` repairs a missing installation). `/health`
 reports the downloader and editor worker status. Run `python -m pytest -q` with
 FFmpeg/ffprobe installed for real media integration tests; CI installs them.
+Run `node --test tests/timeline_model.test.cjs` for timeline geometry tests.

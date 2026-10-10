@@ -179,7 +179,7 @@ class Editor:
             sources.append(probe(self.asset_path(asset['id']), 'video'))
             start = number(clip.get('start', 0), 0, asset['duration'], 'Start')
             end = number(clip.get('end', asset['duration']), 0, asset['duration'], 'End')
-            if end - start < .05:
+            if end - start < .05 - 1e-9:
                 raise ValueError('Each clip needs at least 0.05 seconds; end must be after start.')
             speed = number(clip.get('speed', 1), .25, 4, 'Speed')
             volume = number(clip.get('volume', 1), 0, 2, 'Volume')
@@ -187,17 +187,15 @@ class Editor:
         duration = sum((c['end'] - c['start']) / c['speed'] for c in clips)
         if duration > 7200:
             raise ValueError('Keep an export under two hours. Split longer projects into separate exports.')
-        music_id = body.get('music_id') or None
-        if music_id and self.asset(music_id)['kind'] != 'audio':
-            raise ValueError('Choose an audio file for background music.')
+        audio_clips = self.validate_audio(body, duration)
         if any(s['hdr'] for s in sources):
             raise ValueError('HDR footage needs color-managed handling. This editor currently accepts SDR footage only; it will not silently flatten HDR colors.')
         native = sources[0]
         if not native['pixel_format']:
             raise ValueError('Cannot determine the source pixel format safely. Choose another video.')
         audio_sources = [s for s in sources if s['has_audio']]
-        if music_id:
-            audio_sources.append(probe(self.asset_path(music_id), 'audio'))
+        for region in audio_clips:
+            audio_sources.append(probe(self.asset_path(region['asset_id']), 'audio'))
         audio = audio_sources[0] if audio_sources else dict(sample_rate=48000, channels=2, channel_layout='stereo')
         if profile == 'lossless':
             keys = ('width', 'height', 'rotation', 'pixel_format', 'sar', 'color_range',
@@ -209,9 +207,46 @@ class Editor:
             if any((s['sample_rate'], s['channels'], s['channel_layout']) !=
                    (audio['sample_rate'], audio['channels'], audio['channel_layout']) for s in audio_sources):
                 raise ValueError('Lossless master needs matching audio sample rates and channel layouts; export separately or choose Instagram MP4.')
-        return dict(clips=clips, profile=profile, resolution='1080', shape=shape, duration=duration, music_id=music_id,
+        return dict(clips=clips, profile=profile, resolution='1080', shape=shape, duration=duration,
+                    audio_clips=audio_clips, music_id=None,
                     native=native, audio=audio, fps=60 if any(frame_rate(s) > 30.1 for s in sources) else 30,
                     music_volume=number(body.get('music_volume', .3), 0, 2, 'Music volume'))
+
+    def validate_audio(self, body, duration):
+        raw = body.get('audio_clips')
+        if raw is None:
+            # Preserve old saved jobs and API clients using one looping music bed.
+            music_id = body.get('music_id')
+            raw = [] if not music_id else [dict(asset_id=music_id, loop=True, length=duration,
+                                               volume=body.get('music_volume', .3))]
+        if not isinstance(raw, list) or len(raw) > 20:
+            raise ValueError('Use at most 20 independent audio clips.')
+        regions = []
+        for clip in raw:
+            if not isinstance(clip, dict):
+                raise ValueError('Invalid audio clip.')
+            asset = self.asset(clip.get('asset_id'))
+            source = probe(self.asset_path(asset['id']), 'audio')
+            start = number(clip.get('start', 0), 0, source['duration'], 'Audio start')
+            end = number(clip.get('end', source['duration']), 0, source['duration'], 'Audio end')
+            if end - start < .05 - 1e-9:
+                raise ValueError('Each audio clip needs at least 0.05 seconds.')
+            speed = number(clip.get('speed', 1), .25, 4, 'Audio speed')
+            at = number(clip.get('at', 0), 0, 7200, 'Timeline position')
+            track = clip.get('track', 1)
+            if type(track) is not int or track not in (1, 2, 3):
+                raise ValueError('Choose audio track 1, 2 or 3.')
+            loop = clip.get('loop', False)
+            if type(loop) is not bool:
+                raise ValueError('Choose whether to loop the audio.')
+            natural = (end - start) / speed
+            length = number(clip.get('length', natural) if loop else natural, .01, 7200, 'Audio length')
+            if at + length > 7200:
+                raise ValueError('Keep audio within the two-hour timeline limit.')
+            regions.append(dict(asset_id=asset['id'], start=start, end=end, speed=speed, at=at,
+                                volume=number(clip.get('volume', 1), 0, 2, 'Audio volume'),
+                                track=track, loop=loop, length=length))
+        return regions
 
     def enqueue(self, body):
         if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
@@ -229,6 +264,10 @@ class Editor:
                 needed = 2 * raw_bytes + recipe['duration'] * recipe['audio']['sample_rate'] * recipe['audio']['channels'] * 16
             else:
                 needed = recipe['duration'] * 8_000_000
+            audio_seconds = sum(min((c['end'] - c['start']) / c['speed'], c['length'], recipe['duration'] - c['at'])
+                                for c in recipe['audio_clips'] if c['at'] < recipe['duration'] and c['volume'] > 0)
+            rate, count = (recipe['audio']['sample_rate'], recipe['audio']['channels']) if recipe['profile'] == 'lossless' else (48000, 2)
+            needed += audio_seconds * rate * count * 8
             free = shutil.disk_usage(self.root).free
             if free < RESERVE + needed:
                 raise ValueError(f'This export reserves about {(RESERVE + needed) / 1024**3:.1f} GB including temporary files; '
@@ -378,12 +417,45 @@ class Editor:
                 f"file '{i}.mkv'\nduration {(c['end'] - c['start']) / c['speed']:.9f}\n"
                 for i, c in enumerate(recipe['clips'])))
             args = ['-f', 'concat', '-safe', '1', '-protocol_whitelist', 'file,pipe', '-i', str(directory / 'clips.txt')]
-            if recipe['music_id']:
-                music = self.asset(recipe['music_id'])
-                args += ['-stream_loop', '-1', *INPUT_OPTIONS, '-i', str(self.asset_path(music['id'])),
-                         '-filter_complex', f"[1:{music['audio_index']}]volume={recipe['music_volume']}:precision=double[music];"
-                         '[0:a][music]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95:latency=1[a]',
-                         '-map', '0:v:0', '-map', '[a]', '-c:v', 'copy']
+            regions = recipe.get('audio_clips')
+            if regions is None:
+                regions = self.validate_audio(recipe, recipe['duration'])
+            audible = [c for c in regions if c['at'] < recipe['duration'] and c['volume'] > 0]
+            filters, labels = [], ['[0:a]']
+            for index, region in enumerate(audible, 1):
+                audio_asset = self.asset(region['asset_id'])
+                length = min(region['length'], recipe['duration'] - region['at'])
+                natural = min((region['end'] - region['start']) / region['speed'], length)
+                # Trim first, then loop only that selected section, never the whole source.
+                audio_file = directory / f'audio-{index}.wav'
+                effects = []
+                if region['speed'] != 1:
+                    effects.append(tempo(region['speed']))
+                if region['volume'] != 1:
+                    effects.append(f"volume={region['volume']}:precision=double")
+                effect = ','.join(effects)
+                audio_args = ['-ss', str(region['start']), *INPUT_OPTIONS, '-i', str(self.asset_path(audio_asset['id'])),
+                              '-map', f"0:{audio_asset['audio_index']}", '-vn', '-af',
+                              f"aresample=osf=dbl,atrim=duration={region['end'] - region['start']},asetpts=PTS-STARTPTS," +
+                              (effect + ',' if effect else '') +
+                              f'apad,atrim=duration={natural}', '-t', str(natural), '-c:a', 'pcm_f64le',
+                              '-ar', str(sample_rate), '-ac', str(channels), '-rf64', 'auto', str(audio_file)]
+                self.execute(ident, audio_args, directory, natural, 90 + 4 * (index - 1) / len(audible), 4 / len(audible))
+                if region['loop']:
+                    args += ['-stream_loop', '-1']
+                args += [*INPUT_OPTIONS, '-i', str(audio_file)]
+                filters.append(f'[{index}:a]atrim=duration={length},asetpts=PTS-STARTPTS[r{index}]')
+                if region['at']:
+                    # Generate leading silence as a stream, avoiding a huge delay buffer on phones.
+                    filters += [f"anullsrc=r={sample_rate}:cl={layout},atrim=duration={region['at']}[s{index}]",
+                                f'[s{index}][r{index}]concat=n=2:v=0:a=1[t{index}]']
+                    labels.append(f'[t{index}]')
+                else:
+                    labels.append(f'[r{index}]')
+            if audible:
+                filters.append(''.join(labels) + f'amix=inputs={len(labels)}:duration=first:normalize=0,'
+                               'alimiter=limit=0.95:level=0:latency=1[a]')
+                args += ['-filter_complex', ';'.join(filters), '-map', '0:v:0', '-map', '[a]', '-c:v', 'copy']
             else:
                 args += ['-map', '0:v:0', '-map', '0:a:0', '-c:v', 'copy']
             args += ['-c:a', 'pcm_f64le'] if lossless else ['-c:a', 'aac', '-b:a', '256k']
@@ -391,7 +463,7 @@ class Editor:
             if not lossless:
                 args += ['-movflags', '+faststart']
             args += [str(directory / f'result.{extension}')]
-            self.execute(ident, args, directory, recipe['duration'], 90, 10)
+            self.execute(ident, args, directory, recipe['duration'], 94 if audible else 90, 6 if audible else 10)
             self.check(ident)
             status = 'complete'
         except Cancelled:
@@ -422,7 +494,8 @@ def install_editor(app, root):
 
     @bp.errorhandler(RequestEntityTooLarge)
     def too_large(exc):
-        return jsonify(error='Each imported file must be 2 GB or smaller.'), 413
+        return jsonify(error='Timeline request is too large.' if request.endpoint == 'editor.export'
+                       else 'Each imported file must be 2 GB or smaller.'), 413
 
     @bp.get('/editor')
     def page():
@@ -490,7 +563,7 @@ def install_editor(app, root):
             rows = db.execute("SELECT recipe FROM exports WHERE status IN ('queued','rendering','cancelling')")
             for row in rows:
                 recipe = json.loads(row[0])
-                if recipe['music_id'] == ident or any(c['asset_id'] == ident for c in recipe['clips']):
+                if recipe.get('music_id') == ident or any(c['asset_id'] == ident for c in recipe['clips'] + recipe.get('audio_clips', [])):
                     return jsonify(error='This file is used by an active export. Wait or cancel it first.'), 409
             editor.asset_path(ident).unlink(missing_ok=True)
             db.execute('DELETE FROM assets WHERE id=?', (ident,))
@@ -498,6 +571,7 @@ def install_editor(app, root):
 
     @bp.post('/api/editor/exports')
     def export():
+        request.max_content_length = 64 * 1024
         return jsonify(editor.enqueue(request.get_json(silent=True))), 202
 
     @bp.post('/api/editor/exports/<ident>/cancel')

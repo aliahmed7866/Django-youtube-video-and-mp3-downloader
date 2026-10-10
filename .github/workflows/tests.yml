@@ -11,4 +11,6 @@ jobs:
       - run: pip install -r requirements.txt pytest
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: python -m pytest -q
+      - run: node --test tests/timeline_model.test.cjs
+      - run: node --check mediahub/static/editor.js
       - run: bash -n termux/install-service.sh termux/update.sh
