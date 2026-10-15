@@ -1,4 +1,5 @@
 """Local, disk-backed video editing. One export at a time keeps phone RAM bounded."""
+from array import array
 from contextlib import contextmanager
 import json
 import math
@@ -17,7 +18,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 UPLOAD_LIMIT = 2 * 1024**3
 RESERVE = 256 * 1024**2
 ACTIVE = ('queued', 'rendering', 'cancelling')
-REVERSE_CHUNK_BYTES = 32 * 1024**2
+REVERSE_CHUNK_BYTES = 64 * 1024**2
 
 FORMATS = 'mov,matroska,webm,avi,mpegts,mpeg,flv,ogg,mp3,wav,aac,flac'
 INPUT_OPTIONS = ['-protocol_whitelist', 'file,pipe', '-format_whitelist', FORMATS]
@@ -165,7 +166,14 @@ class Editor:
             db.execute('UPDATE exports SET ' + ','.join(k + '=?' for k in fields) + ' WHERE id=?',
                        (*fields.values(), ident))
 
-    def validate(self, body):
+    def media_info(self, ident, kind, cache):
+        key = (ident, kind)
+        if key not in cache:
+            cache[key] = probe(self.asset_path(ident), kind)
+        return cache[key]
+
+    def validate(self, body, media_cache=None):
+        media_cache = {} if media_cache is None else media_cache
         if not isinstance(body, dict) or not isinstance(body.get('clips'), list) or not 1 <= len(body['clips']) <= 50:
             raise ValueError('Add between 1 and 50 clips.')
         profile = body.get('profile', 'lossless')
@@ -185,7 +193,7 @@ class Editor:
             if asset['kind'] != 'video':
                 raise ValueError('Timeline clips must be videos.')
             # Re-probe also upgrades assets imported by older editor versions.
-            sources.append(probe(self.asset_path(asset['id']), 'video'))
+            sources.append(self.media_info(asset['id'], 'video', media_cache))
             start = number(clip.get('start', 0), 0, asset['duration'], 'Start')
             end = number(clip.get('end', asset['duration']), 0, asset['duration'], 'End')
             if end - start < .05 - 1e-9:
@@ -196,7 +204,7 @@ class Editor:
         duration = sum((c['end'] - c['start']) / c['speed'] for c in clips)
         if duration > 7200:
             raise ValueError('Keep an export under two hours. Split longer projects into separate exports.')
-        audio_clips = self.validate_audio(body, duration)
+        audio_clips = self.validate_audio(body, duration, media_cache)
         if any(s['hdr'] for s in sources):
             raise ValueError('HDR footage needs color-managed handling. This editor currently accepts SDR footage only; it will not silently flatten HDR colors.')
         native = sources[0]
@@ -204,7 +212,7 @@ class Editor:
             raise ValueError('Cannot determine the source pixel format safely. Choose another video.')
         audio_sources = [s for s in sources if s['has_audio']]
         for region in audio_clips:
-            audio_sources.append(probe(self.asset_path(region['asset_id']), 'audio'))
+            audio_sources.append(self.media_info(region['asset_id'], 'audio', media_cache))
         audio = audio_sources[0] if audio_sources else dict(sample_rate=48000, channels=2, channel_layout='stereo')
         if profile == 'lossless':
             keys = ('width', 'height', 'rotation', 'pixel_format', 'sar', 'color_range',
@@ -221,7 +229,8 @@ class Editor:
                     native=native, audio=audio, fps=60 if any(frame_rate(s) > 30.1 for s in sources) else 30,
                     music_volume=number(body.get('music_volume', .3), 0, 2, 'Music volume'))
 
-    def validate_audio(self, body, duration):
+    def validate_audio(self, body, duration, media_cache=None):
+        media_cache = {} if media_cache is None else media_cache
         raw = body.get('audio_clips')
         if raw is None:
             # Preserve old saved jobs and API clients using one looping music bed.
@@ -235,7 +244,7 @@ class Editor:
             if not isinstance(clip, dict):
                 raise ValueError('Invalid audio clip.')
             asset = self.asset(clip.get('asset_id'))
-            source = probe(self.asset_path(asset['id']), 'audio')
+            source = self.media_info(asset['id'], 'audio', media_cache)
             start = number(clip.get('start', 0), 0, source['duration'], 'Audio start')
             end = number(clip.get('end', source['duration']), 0, source['duration'], 'Audio end')
             if end - start < .05 - 1e-9:
@@ -261,14 +270,15 @@ class Editor:
         if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
             raise ValueError('Install FFmpeg in Termux: pkg install ffmpeg')
         with self.lock:
-            recipe = self.validate(body)
+            media_cache = {}
+            recipe = self.validate(body, media_cache)
             # Lossless output can approach raw size. Include segments and final file.
             native = recipe['native']
             if recipe['profile'] == 'lossless':
                 pixels = native['width'] * native['height']
                 raw_bytes = 0
                 for clip in recipe['clips']:
-                    source = probe(self.asset_path(clip['asset_id']), 'video')
+                    source = self.media_info(clip['asset_id'], 'video', media_cache)
                     raw_bytes += pixels * bytes_per_pixel(source['pixel_format']) * frame_rate(source) * (clip['end'] - clip['start'])
                 needed = 2 * raw_bytes + recipe['duration'] * recipe['audio']['sample_rate'] * recipe['audio']['channels'] * 16
             else:
@@ -279,14 +289,14 @@ class Editor:
             needed += audio_seconds * rate * count * 8
             for clip in recipe['clips']:
                 if clip['reverse']:
-                    source = probe(self.asset_path(clip['asset_id']), 'video')
+                    source = self.media_info(clip['asset_id'], 'video', media_cache)
                     seconds = clip['end'] - clip['start']
                     needed += seconds * source['width'] * source['height'] * bytes_per_pixel(source['pixel_format']) * frame_rate(source)
                     if clip['volume'] and source['has_audio']:
                         needed += seconds * source['sample_rate'] * source['channels'] * 16
             for region in recipe['audio_clips']:
                 if region['reverse'] and region['volume'] and region['at'] < recipe['duration']:
-                    source = probe(self.asset_path(region['asset_id']), 'audio')
+                    source = self.media_info(region['asset_id'], 'audio', media_cache)
                     needed += (region['end'] - region['start']) * source['sample_rate'] * source['channels'] * 16
             free = shutil.disk_usage(self.root).free
             if free < RESERVE + needed:
@@ -356,7 +366,10 @@ class Editor:
                             self.update(ident, progress=min(99, offset + weight * fraction))
                         except ValueError:
                             pass
-                    self.stop.wait(.25)
+                    try:
+                        proc.wait(timeout=.25)
+                    except subprocess.TimeoutExpired:
+                        pass
                 if proc.returncode:
                     raise RuntimeError('FFmpeg could not export this media with the selected quality. Details are in the export log.')
             finally:
@@ -390,7 +403,12 @@ class Editor:
                 src.seek(remaining); data = src.read(size)
                 if len(data) != size:
                     raise RuntimeError('Audio data changed during reversal.')
-                dst.write(b''.join(data[i:i + frame_bytes] for i in range(size - frame_bytes, -1, -frame_bytes)))
+                # Slice integer bit patterns in C, keeping every channel and float bit exact.
+                samples = array('Q'); samples.frombytes(data)
+                reversed_samples = array('Q', [0]) * len(samples)
+                for channel in range(source['channels']):
+                    reversed_samples[channel::source['channels']] = samples[channel::source['channels']][::-1]
+                dst.write(reversed_samples.tobytes())
                 self.update(ident, progress=min(99, offset + weight / 2 + weight / 2 * (1 - remaining / total)))
         raw.unlink()
         return ['-f', 'f64le', '-ar', str(source['sample_rate']), '-ac', str(source['channels']), '-i', str(target)]
@@ -400,7 +418,7 @@ class Editor:
         source = probe(self.asset_path(asset['id']), 'video')
         rate = frame_rate(source)
         frame_bytes = source['width'] * source['height'] * bytes_per_pixel(source['pixel_format'])
-        # Target 32 MiB of frame planes, plus decoder/filter overhead. At least one frame.
+        # Target 64 MiB of frame planes, plus decoder/filter overhead. At least one frame.
         chunk = max(1 / rate, min(2, REVERSE_CHUNK_BYTES / max(1, frame_bytes * rate)))
         count = max(1, math.ceil((end - start) / chunk))
         entries, pending = [], 0
@@ -457,6 +475,8 @@ class Editor:
                 if clip.get('reverse', False):
                     args = self.reverse_video(ident, asset, clip['start'], clip['end'], directory, f'v{i}', offset, weight * .4)
                     video_label = '0:0'
+                    if lossless and clip['speed'] != 1:
+                        args = ['-itsscale', str(1 / clip['speed']), *args]
                     if asset['has_audio'] and clip['volume']:
                         args += self.reverse_audio(ident, asset, clip['start'], clip['end'], directory, f'v{i}', offset + weight * .4, weight * .1)
                         audio_label = '1:0'
@@ -485,9 +505,15 @@ class Editor:
                                f'apad,atrim=duration={duration}[a]')
                 else:
                     afilter = f'anullsrc=r={sample_rate}:cl={layout},aresample=osf=dbl,atrim=duration={duration}[a]'
-                args += ['-filter_complex', vfilter + ';' + afilter, '-map', '[v]', '-map', '[a]',
+                copy_reversed = lossless and clip.get('reverse', False)
+                # Reversed chunks already contain native FFV1 frames. Scale input timestamps
+                # for speed edits and copy packets rather than decoding and encoding them again.
+                args += ['-filter_complex', afilter if copy_reversed else vfilter + ';' + afilter,
+                         '-map', video_label if copy_reversed else '[v]', '-map', '[a]',
                          '-t', str(duration), '-threads', '2']
-                if lossless:
+                if copy_reversed:
+                    args += ['-c:v', 'copy']
+                elif lossless:
                     # Enforce the native pixel format: fail instead of silently reducing bit depth/chroma.
                     args += ['-c:v', 'ffv1', '-level', '3', '-slicecrc', '1',
                              '-pix_fmt', '+' + recipe['native']['pixel_format'], '-fps_mode', 'passthrough',

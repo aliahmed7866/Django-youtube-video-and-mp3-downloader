@@ -26,7 +26,7 @@ def run_export(editor, body):
     return directory / 'result.mkv'
 
 
-@pytest.mark.parametrize('speed', [1, .5, 2])
+@pytest.mark.parametrize('speed', [.25, .5, 1, 2, 4])
 def test_reversed_trimmed_video_frames_across_chunks(setup, changing_source, monkeypatch, speed):
     editor, _, _ = setup
     asset = upload(setup, changing_source)
@@ -34,6 +34,12 @@ def test_reversed_trimmed_video_frames_across_chunks(setup, changing_source, mon
     monkeypatch.setattr('mediahub.editor.REVERSE_CHUNK_BYTES', 192 * 108 * 3 * 3)
     path = run_export(editor, {'clips': [dict(asset_id=asset['id'], start=.2, end=.8, speed=speed, reverse=True)]})
     assert frame_hashes(path) == frame_hashes(changing_source)[6:24][::-1]
+    timestamps = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'frame=best_effort_timestamp_time', '-of', 'json', str(path)]))['frames']
+    points = [float(f['best_effort_timestamp_time']) for f in timestamps]
+    assert points == sorted(points)
+    assert points[0] == pytest.approx(0, abs=.002)
+    assert points[-1] == pytest.approx((.6 - 1 / 30) / speed, abs=.04 / speed + .005)
     if speed == 1:
         original = audio_samples(changing_source)
         frames = [original[i:i + 16] for i in range(int(.2 * 48000) * 16, int(.8 * 48000) * 16, 16)]
@@ -86,3 +92,40 @@ def test_reverse_instagram_copy(setup, media):
     assert editor.job(job['id'])['status'] == 'complete'
     response = client.get(f"/api/editor/exports/{job['id']}/file")
     assert response.status_code == 200 and response.mimetype == 'video/mp4'
+
+
+@pytest.mark.parametrize('speed', [1, 2])
+def test_long_gop_reverse_keeps_all_frames_through_final_mux(setup, tmp_path, monkeypatch, speed):
+    editor, _, _ = setup
+    source = tmp_path / 'long-gop.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-filter_threads', '1', '-f', 'lavfi', '-i',
+                    'testsrc2=s=320x180:r=30:d=4', '-f', 'lavfi', '-i', 'sine=r=48000:d=4',
+                    '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '120', '-threads', '2', '-c:a', 'aac', str(source)], check=True)
+    asset = upload(setup, source)
+    monkeypatch.setattr('mediahub.editor.REVERSE_CHUNK_BYTES', 320 * 180 * 1.5 * 10)
+    target = run_export(editor, dict(clips=[dict(asset_id=asset['id'], reverse=True, speed=speed)]))
+    assert len(frame_hashes(source)) == 120
+    assert frame_hashes(target) == frame_hashes(source)[::-1]
+    frames = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+        '-show_entries', 'frame=best_effort_timestamp_time', '-of', 'json', str(target)]))['frames']
+    assert float(frames[-1]['best_effort_timestamp_time']) == pytest.approx((4 - 1 / 30) / speed, abs=.04)
+
+
+def test_instagram_reverse_reaches_beginning_of_source_after_multiple_chunks(setup, tmp_path, monkeypatch):
+    editor, _, _ = setup
+    source = tmp_path / 'blue-red.mp4'
+    subprocess.run(['ffmpeg', '-v', 'error', '-filter_complex_threads', '1', '-f', 'lavfi', '-i',
+                    'color=c=blue:s=320x180:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=red:s=320x180:r=30:d=2',
+                    '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0[v]', '-map', '[v]',
+                    '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '120', '-threads', '2', str(source)], check=True)
+    asset = upload(setup, source)
+    monkeypatch.setattr('mediahub.editor.REVERSE_CHUNK_BYTES', 320 * 180 * 1.5 * 10)
+    job = editor.enqueue(dict(profile='instagram', allow_lossy=True, shape='square',
+                              clips=[dict(asset_id=asset['id'], reverse=True)]))
+    editor.render(job)
+    assert editor.job(job['id'])['status'] == 'complete'
+    target = editor.exports / job['id'] / 'result.mp4'
+    for at, channel in [(.5, 0), (3.5, 2)]:
+        pixel = subprocess.check_output(['ffmpeg', '-v', 'error', '-ss', str(at), '-i', str(target),
+            '-vf', 'crop=2:2:iw/2:ih/2', '-frames:v', '1', '-pix_fmt', 'rgb24', '-threads', '1', '-f', 'rawvideo', '-'])
+        assert pixel[channel] > 200

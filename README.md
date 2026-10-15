@@ -167,10 +167,13 @@ of a reversed clip removes material from its source out point. Source in/out
 fields always describe the original file. Reverse survives duplicates, undo/redo,
 draft saves and export.
 
-Reverse video is prepared in short lossless chunks on disk; decoded audio sample
+Reverse video is prepared in short lossless chunks on disk (targeting 64 MiB of
+frame planes per chunk, plus decoder overhead); decoded audio sample
 frames are reversed in bounded disk reads. This avoids buffering an entire long
-clip in RAM, but needs extra temporary storage and processing time. Lossless export
-retains the selected decoded video frames in reverse order without changing their
+clip in RAM, but needs extra temporary storage and processing time. The lossless
+export copies prepared reverse frames rather than encoding them again. Reverse
+preview limits backward seeking to eight requests per second to reduce phone load.
+Lossless export retains the selected decoded video frames in reverse order without changing their
 pixels. Sparse variable-frame-rate footage retains its frames; preview timing is
 approximate. Browser preview uses silent backward frame seeking. Reversed audio
 is omitted from quick preview and is heard in the exported file. Exported Instagram
