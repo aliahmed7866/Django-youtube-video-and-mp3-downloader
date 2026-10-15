@@ -10,6 +10,11 @@
   }
   function trimVideo(c, edge, delta, duration) {
     const next = {...c};
+    if (c.reverse) {
+      if (edge === 'start') next.end = clamp(c.end - delta * c.speed, c.start + .05, duration);
+      else next.start = clamp(c.start - delta * c.speed, 0, c.end - .05);
+      return next;
+    }
     if (edge === 'start') next.start = clamp(c.start + delta * c.speed, 0, c.end - .05);
     else next.end = clamp(c.end + delta * c.speed, c.start + .05, duration);
     return next;
@@ -21,6 +26,14 @@
         return {...c, at: c.at + d, length: c.length - d};
       }
       return {...c, length: clamp(c.length + delta, .05, 7200 - c.at)};
+    }
+    if (c.reverse) {
+      if (edge === 'start') {
+        const d = clamp(delta, Math.max(-c.at, (c.end - duration) / c.speed), (c.end - c.start - .05) / c.speed);
+        return {...c, at: c.at + d, end: c.end - d * c.speed};
+      }
+      return {...c, start: clamp(c.start - delta * c.speed,
+        Math.max(0, c.end - (7200 - c.at) * c.speed), c.end - .05)};
     }
     if (edge === 'start') {
       const d = clamp(delta, Math.max(-c.at, -c.start / c.speed), (c.end - c.start - .05) / c.speed);
@@ -37,11 +50,14 @@
   }
   function split(c, elapsed, audio = false) {
     if (c.loop) throw new Error('Turn off looping before splitting an audio clip.');
-    const cut = c.start + elapsed * c.speed;
+    const cut = c.reverse ? c.end - elapsed * c.speed : c.start + elapsed * c.speed;
     if (cut - c.start < .05 || c.end - cut < .05) throw new Error('Place the playhead inside the clip, away from either edge.');
-    return [{...c, end: cut}, {...c, start: cut, ...(audio ? {at: c.at + elapsed} : {})}];
+    const first = c.reverse ? {...c, start: cut} : {...c, end: cut};
+    const second = c.reverse ? {...c, end: cut} : {...c, start: cut};
+    return [first, {...second, ...(audio ? {at: c.at + elapsed} : {})}];
   }
-  const api = {clamp, span, audioSpan, positions, trimVideo, trimAudio, reorder, split};
+  const sourceTime = (c, elapsed) => clamp(c.reverse ? c.end - elapsed * c.speed : c.start + elapsed * c.speed, c.start, c.end);
+  const api = {sourceTime, clamp, span, audioSpan, positions, trimVideo, trimAudio, reorder, split};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.TimelineModel = api;
 })(typeof window === 'undefined' ? globalThis : window);

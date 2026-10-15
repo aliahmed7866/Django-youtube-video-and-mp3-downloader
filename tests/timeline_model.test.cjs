@@ -39,3 +39,28 @@ test('split translates playhead through speed and preserves total length and aud
   assert.equal(M.span(left) + M.span(right), M.span(c));
   assert.throws(() => M.split(c, 0)); assert.throws(() => M.split({...c, loop: true}, 1));
 });
+test('reverse video edges address the opposite source boundary', () => {
+  const c = {start: 2, end: 8, speed: 2, reverse: true};
+  assert.equal(M.trimVideo(c, 'start', 1, 10).end, 6);
+  assert.equal(M.trimVideo(c, 'end', 1, 10).start, 0);
+  assert.equal(M.trimVideo(c, 'start', -99, 10).end, 10);
+  near(M.trimVideo(c, 'end', -99, 10).start, 7.95);
+});
+test('reverse audio left trim keeps right edge fixed and restores source end', () => {
+  const c = {start: 2, end: 8, speed: .5, at: 3, reverse: true};
+  const trimmed = M.trimAudio(c, 'start', 2, 10);
+  assert.equal(trimmed.end, 7); assert.equal(trimmed.at, 5);
+  assert.equal(trimmed.at + M.span(trimmed), c.at + M.span(c));
+  const restored = M.trimAudio(c, 'start', -99, 10);
+  assert.equal(restored.at, 0); assert.equal(restored.end, 9.5);
+  assert.equal(M.trimAudio(c, 'end', 99, 10).start, 0);
+});
+test('reverse split and source-time mapping retain backward source order', () => {
+  const c = {start: 2, end: 8, speed: 2, reverse: true, at: 5};
+  const [left, right] = M.split(c, 1, true);
+  assert.equal(left.start, 6); assert.equal(left.end, 8);
+  assert.equal(right.start, 2); assert.equal(right.end, 6); assert.equal(right.at, 6);
+  assert.equal(M.span(left) + M.span(right), M.span(c));
+  assert.equal(M.sourceTime(c, 0), 8); assert.equal(M.sourceTime(c, 1), 6);
+  assert.equal(M.sourceTime({...c, reverse: false}, 1), 4);
+});

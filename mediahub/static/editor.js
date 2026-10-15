@@ -5,6 +5,7 @@ const csrf = document.querySelector('meta[name="csrf-token"]').content;
 const draftKey = 'mediahub-editor-draft-v1';
 let clips = [], audioClips = [], assets = [], ready = false, importing = false;
 let selection = null, playhead = 0, playing = -1, running = false, previewFrame = 0;
+let reverseClock = 0, reverseAt = 0, previewReversed = false;
 let drag = null, undoStack = [], redoStack = [], audioPlayers = [], draft = {};
 try { draft = JSON.parse(localStorage.getItem(draftKey) || '{}') || {}; } catch (_) { /* Fresh draft. */ }
 if (Array.isArray(draft.clips)) clips = draft.clips;
@@ -137,6 +138,14 @@ function renderInspector() {
     });
     label.append(input); fields.append(label);
   }
+  const reverseLabel = el('label', undefined, 'loop-choice'), reverse = el('input');
+  reverse.type = 'checkbox'; reverse.checked = !!c.reverse; reverse.dataset.field = 'reverse';
+  reverse.onchange = () => {
+    change(() => { c.reverse = reverse.checked; });
+    if (!audio) seekTo(M.positions(clips)[index].at);
+  };
+  reverseLabel.append(reverse, document.createTextNode(audio ? 'Reverse audio' : 'Reverse video and linked audio'));
+  fields.append(reverseLabel);
   if (audio) {
     const label = el('label', 'Audio track'), input = el('select');
     [1, 2, 3].forEach(n => input.add(new Option(`Audio ${n}`, n))); input.value = String(c.track); input.dataset.field = 'track';
@@ -184,7 +193,7 @@ function renderGraph() {
     const box = el('div', undefined, `timeline-clip ${kind} ${linked ? 'linked' : ''}`);
     box.dataset.kind = kind; box.dataset.index = String(index); box.style.left = `${at * pixels}px`; box.style.width = `${Math.max(1, length * pixels)}px`;
     const name = assetFor(c)?.name || 'Missing file';
-    const body = el('button', `${linked ? (c.volume ? '♪ ' : 'Muted · ') : ''}${name}${c.loop ? ' · LOOP' : ''}`, 'clip-body');
+    const body = el('button', `${linked ? (c.volume ? '♪ ' : 'Muted · ') : ''}${name}${c.reverse ? ' · REVERSE' : ''}${c.loop ? ' · LOOP' : ''}`, 'clip-body');
     body.type = 'button'; body.dataset.action = linked ? 'select' : 'move'; body.title = `${name} · ${clock(at, true)}–${clock(at + length, true)}`;
     body.setAttribute('aria-label', `${kind} clip ${index + 1}: ${name}. ${linked ? 'Linked to video.' : 'Drag to move; arrow keys also move.'}`);
     body.onclick = () => select(kind, index); box.append(body);
@@ -338,7 +347,7 @@ function syncAudio(force = false) {
   audioClips.forEach((c, i) => {
     let player = audioPlayers[i];
     const offset = playhead - c.at, length = M.audioSpan(c);
-    if (offset < 0 || offset >= length || !c.volume) { player?.pause(); return; }
+    if (offset < 0 || offset >= length || !c.volume || c.reverse) { player?.pause(); return; }
     if (!player) { player = document.createElement('audio'); player.preload = 'metadata'; player.src = `/api/editor/assets/${c.asset_id}/file`; audioPlayers[i] = player; }
     const source = c.start + ((offset * c.speed) % (c.end - c.start));
     player.playbackRate = c.speed; player.volume = Math.min(1, c.volume);
@@ -354,17 +363,18 @@ function locate(time) {
 function loadPreview(time, autoplay) {
   if (!clips.length) return;
   const {positions, index} = locate(time), c = clips[index]; if (!valid(c)) return;
-  const video = $('preview'), src = `/api/editor/assets/${c.asset_id}/file`, sourceTime = c.start + Math.max(0, time - positions[index].at) * c.speed;
-  playing = index;
+  const video = $('preview'), src = `/api/editor/assets/${c.asset_id}/file`, sourceTime = M.sourceTime(c, Math.max(0, time - positions[index].at));
+  playing = index; previewReversed = !!c.reverse; reverseClock = 0; reverseAt = time;
   const configure = () => {
     if (playing !== index) return;
     video.currentTime = Math.min(c.end - .00001, sourceTime); video.playbackRate = c.speed;
-    video.volume = Math.min(1, c.volume); video.muted = c.volume === 0;
-    if (autoplay && running) video.play().catch(() => { stopPreview(); notice('Tap Play timeline again to start playback.'); });
+    video.volume = Math.min(1, c.volume); video.muted = c.volume === 0 || !!c.reverse;
+    if (c.reverse) video.pause();
+    if (autoplay && running && !c.reverse) video.play().catch(() => { stopPreview(); notice('Tap Play timeline again to start playback.'); });
   };
   if (video.getAttribute('src') !== src) { video.onloadedmetadata = configure; video.src = src; }
   else if (video.readyState >= 1) configure(); else video.onloadedmetadata = configure;
-  $('preview-label').textContent = `${index + 1}. ${assetFor(c).name} · ${c.speed}×`;
+  $('preview-label').textContent = `${index + 1}. ${assetFor(c).name} · ${c.speed}×${c.reverse ? ' · Reverse preview (silent, approximate)' : ''}`;
 }
 function seekTo(time) {
   stopPreview(); playhead = M.clamp(time, 0, duration()); updatePlayhead(); loadPreview(playhead, false);
@@ -379,7 +389,18 @@ function advancePreview() {
 function previewTick() {
   if (!running) return;
   const video = $('preview'), c = clips[playing];
-  if (c && video.readyState >= 2 && !video.paused) {
+  if (c?.reverse && video.readyState >= 2) {
+    const now = performance.now();
+    if (!reverseClock) { reverseClock = now; reverseAt = playhead; }
+    playhead = reverseAt + (now - reverseClock) / 1000;
+    const end = M.positions(clips)[playing].at + M.span(c);
+    if (playhead >= end) advancePreview();
+    else {
+      // Browsers generally cannot play negative rates. Seek backward while the timeline clock runs.
+      if (!video.seeking) video.currentTime = Math.min(c.end - .00001, M.sourceTime(c, playhead - M.positions(clips)[playing].at));
+      updatePlayhead(); syncAudio();
+    }
+  } else if (c && video.readyState >= 2 && !video.paused) {
     if (video.currentTime >= c.end - .005) advancePreview();
     else { playhead = M.positions(clips)[playing].at + Math.max(0, video.currentTime - c.start) / c.speed; updatePlayhead(); syncAudio(); }
   } else for (const p of audioPlayers) p?.pause();
@@ -390,7 +411,10 @@ $('play').onclick = () => {
   running = true; loadPreview(playhead, true); syncAudio(true); previewFrame = requestAnimationFrame(previewTick);
 };
 $('stop').onclick = stopPreview;
-$('preview').addEventListener('ended', advancePreview);
+$('preview').addEventListener('play', () => {
+  if (previewReversed) { $('preview').pause(); if (!running) $('play').click(); }
+});
+$('preview').addEventListener('ended', () => { if (!clips[playing]?.reverse) advancePreview(); });
 $('preview').addEventListener('pause', () => { for (const p of audioPlayers) p?.pause(); });
 $('preview').addEventListener('error', () => { stopPreview(); $('preview-label').textContent = 'This browser cannot preview the source. You can still export it.'; });
 function renderAssets() {
@@ -501,7 +525,7 @@ function renderJobs(jobs) {
         const link = el('a', lossless ? 'Download lossless MKV' : 'Download MP4'); link.href = `/api/editor/exports/${job.id}/file`; link.download = ''; actions.append(link);
         if (lossless) info.append(el('p', 'Lossless master · native frames · open in a compatible player'));
         if (!lossless) actions.append(button('Preview film', () => {
-          stopPreview(); const video = $('preview'); video.onloadedmetadata = null;
+          stopPreview(); previewReversed = false; const video = $('preview'); video.onloadedmetadata = null;
           video.src = `/api/editor/exports/${job.id}/file?play=1`; video.playbackRate = 1; video.volume = 1; video.muted = false;
           video.play().catch(() => {}); $('preview-label').textContent = 'Finished film · exported framing and audio'; video.scrollIntoView({behavior: 'smooth', block: 'center'});
         }));
