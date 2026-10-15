@@ -5,7 +5,7 @@ const csrf = document.querySelector('meta[name="csrf-token"]').content;
 const draftKey = 'mediahub-editor-draft-v1';
 let clips = [], audioClips = [], assets = [], ready = false, importing = false;
 let selection = null, playhead = 0, playing = -1, running = false, previewFrame = 0;
-let reverseClock = 0, reverseAt = 0, previewReversed = false;
+let reverseClock = 0, reverseAt = 0, reverseSeek = 0, audioSync = 0, previewReversed = false;
 let drag = null, undoStack = [], redoStack = [], audioPlayers = [], draft = {};
 try { draft = JSON.parse(localStorage.getItem(draftKey) || '{}') || {}; } catch (_) { /* Fresh draft. */ }
 if (Array.isArray(draft.clips)) clips = draft.clips;
@@ -344,6 +344,9 @@ function stopPreview() {
 }
 function syncAudio(force = false) {
   if (!running) return;
+  const now = performance.now();
+  if (!force && now - audioSync < 80) return;
+  audioSync = now;
   audioClips.forEach((c, i) => {
     let player = audioPlayers[i];
     const offset = playhead - c.at, length = M.audioSpan(c);
@@ -364,7 +367,7 @@ function loadPreview(time, autoplay) {
   if (!clips.length) return;
   const {positions, index} = locate(time), c = clips[index]; if (!valid(c)) return;
   const video = $('preview'), src = `/api/editor/assets/${c.asset_id}/file`, sourceTime = M.sourceTime(c, Math.max(0, time - positions[index].at));
-  playing = index; previewReversed = !!c.reverse; reverseClock = 0; reverseAt = time;
+  playing = index; previewReversed = !!c.reverse; reverseClock = 0; reverseSeek = 0; reverseAt = time;
   const configure = () => {
     if (playing !== index) return;
     video.currentTime = Math.min(c.end - .00001, sourceTime); video.playbackRate = c.speed;
@@ -397,7 +400,12 @@ function previewTick() {
     if (playhead >= end) advancePreview();
     else {
       // Browsers generally cannot play negative rates. Seek backward while the timeline clock runs.
-      if (!video.seeking) video.currentTime = Math.min(c.end - .00001, M.sourceTime(c, playhead - M.positions(clips)[playing].at));
+      // A backward seek may decode a whole GOP. Cap requests at 8/s instead of
+      // seeking on every animation frame and competing with the export worker.
+      if (!video.seeking && now - reverseSeek >= 125) {
+        video.currentTime = Math.min(c.end - .00001, M.sourceTime(c, playhead - M.positions(clips)[playing].at));
+        reverseSeek = now;
+      }
       updatePlayhead(); syncAudio();
     }
   } else if (c && video.readyState >= 2 && !video.paused) {
