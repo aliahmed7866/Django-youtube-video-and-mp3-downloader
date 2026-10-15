@@ -17,6 +17,8 @@ from werkzeug.exceptions import RequestEntityTooLarge
 UPLOAD_LIMIT = 2 * 1024**3
 RESERVE = 256 * 1024**2
 ACTIVE = ('queued', 'rendering', 'cancelling')
+REVERSE_CHUNK_BYTES = 32 * 1024**2
+
 FORMATS = 'mov,matroska,webm,avi,mpegts,mpeg,flv,ogg,mp3,wav,aac,flac'
 INPUT_OPTIONS = ['-protocol_whitelist', 'file,pipe', '-format_whitelist', FORMATS]
 
@@ -31,6 +33,13 @@ def number(value, low, high, label):
     if not math.isfinite(result) or not low <= result <= high:
         raise ValueError(f'{label} must be between {low:g} and {high:g}.')
     return result
+
+
+def reverse_flag(clip):
+    value = clip.get('reverse', False)
+    if type(value) is not bool:
+        raise ValueError('Reverse must be on or off.')
+    return value
 
 
 def probe(path, kind):
@@ -183,7 +192,7 @@ class Editor:
                 raise ValueError('Each clip needs at least 0.05 seconds; end must be after start.')
             speed = number(clip.get('speed', 1), .25, 4, 'Speed')
             volume = number(clip.get('volume', 1), 0, 2, 'Volume')
-            clips.append(dict(asset_id=asset['id'], start=start, end=end, speed=speed, volume=volume))
+            clips.append(dict(asset_id=asset['id'], start=start, end=end, speed=speed, volume=volume, reverse=reverse_flag(clip)))
         duration = sum((c['end'] - c['start']) / c['speed'] for c in clips)
         if duration > 7200:
             raise ValueError('Keep an export under two hours. Split longer projects into separate exports.')
@@ -245,7 +254,7 @@ class Editor:
                 raise ValueError('Keep audio within the two-hour timeline limit.')
             regions.append(dict(asset_id=asset['id'], start=start, end=end, speed=speed, at=at,
                                 volume=number(clip.get('volume', 1), 0, 2, 'Audio volume'),
-                                track=track, loop=loop, length=length))
+                                track=track, loop=loop, length=length, reverse=reverse_flag(clip)))
         return regions
 
     def enqueue(self, body):
@@ -268,6 +277,17 @@ class Editor:
                                 for c in recipe['audio_clips'] if c['at'] < recipe['duration'] and c['volume'] > 0)
             rate, count = (recipe['audio']['sample_rate'], recipe['audio']['channels']) if recipe['profile'] == 'lossless' else (48000, 2)
             needed += audio_seconds * rate * count * 8
+            for clip in recipe['clips']:
+                if clip['reverse']:
+                    source = probe(self.asset_path(clip['asset_id']), 'video')
+                    seconds = clip['end'] - clip['start']
+                    needed += seconds * source['width'] * source['height'] * bytes_per_pixel(source['pixel_format']) * frame_rate(source)
+                    if clip['volume'] and source['has_audio']:
+                        needed += seconds * source['sample_rate'] * source['channels'] * 16
+            for region in recipe['audio_clips']:
+                if region['reverse'] and region['volume'] and region['at'] < recipe['duration']:
+                    source = probe(self.asset_path(region['asset_id']), 'audio')
+                    needed += (region['end'] - region['start']) * source['sample_rate'] * source['channels'] * 16
             free = shutil.disk_usage(self.root).free
             if free < RESERVE + needed:
                 raise ValueError(f'This export reserves about {(RESERVE + needed) / 1024**3:.1f} GB including temporary files; '
@@ -348,6 +368,69 @@ class Editor:
                         proc.kill()
                         proc.wait()
 
+    def reverse_audio(self, ident, asset, start, end, directory, prefix, offset, weight=0):
+        """Decode once, reverse whole sample frames on disk with bounded Python memory."""
+        source = probe(self.asset_path(asset['id']), 'audio')
+        raw, target = directory / f'{prefix}-forward.pcm', directory / f'{prefix}-reverse.pcm'
+        args = ['-ss', str(start), *INPUT_OPTIONS, '-i', str(self.asset_path(asset['id'])),
+                '-map', f"0:{asset['audio_index']}", '-vn', '-af',
+                f'aresample=osf=dbl,atrim=duration={end - start},asetpts=PTS-STARTPTS,apad,atrim=duration={end - start}',
+                '-t', str(end - start), '-c:a', 'pcm_f64le', '-ar', str(source['sample_rate']),
+                '-ac', str(source['channels']), '-f', 'f64le', str(raw)]
+        self.execute(ident, args, directory, end - start, offset, weight / 2)
+        frame_bytes = source['channels'] * 8
+        with raw.open('rb') as src, target.open('wb') as dst:
+            remaining = total = raw.stat().st_size
+            if remaining % frame_bytes:
+                raise RuntimeError('Could not reverse complete audio sample frames.')
+            block = max(1, 1024**2 // frame_bytes) * frame_bytes
+            while remaining:
+                self.check(ident)
+                size = min(block, remaining); remaining -= size
+                src.seek(remaining); data = src.read(size)
+                if len(data) != size:
+                    raise RuntimeError('Audio data changed during reversal.')
+                dst.write(b''.join(data[i:i + frame_bytes] for i in range(size - frame_bytes, -1, -frame_bytes)))
+                self.update(ident, progress=min(99, offset + weight / 2 + weight / 2 * (1 - remaining / total)))
+        raw.unlink()
+        return ['-f', 'f64le', '-ar', str(source['sample_rate']), '-ac', str(source['channels']), '-i', str(target)]
+
+    def reverse_video(self, ident, asset, start, end, directory, prefix, offset, weight=0):
+        """Reverse short lossless chunks and read them in reverse source order."""
+        source = probe(self.asset_path(asset['id']), 'video')
+        rate = frame_rate(source)
+        frame_bytes = source['width'] * source['height'] * bytes_per_pixel(source['pixel_format'])
+        # Target 32 MiB of frame planes, plus decoder/filter overhead. At least one frame.
+        chunk = max(1 / rate, min(2, REVERSE_CHUNK_BYTES / max(1, frame_bytes * rate)))
+        count = max(1, math.ceil((end - start) / chunk))
+        entries, pending = [], 0
+        for index in range(count):
+            left = start + (end - start) * (count - index - 1) / count
+            right = start + (end - start) * (count - index) / count
+            name = f'{prefix}-reverse-{index}.mkv'
+            args = ['-copyts', '-start_at_zero', '-threads', '2', '-ss', str(left), *INPUT_OPTIONS, '-i', str(self.asset_path(asset['id'])),
+                    '-map', f"0:{asset['video_index']}", '-an', '-vf',
+                    f'trim=start={left}:end={right},reverse,setpts=PTS-STARTPTS',
+                    '-c:v', 'ffv1', '-level', '3', '-slicecrc', '1', '-threads', '2',
+                    '-pix_fmt', '+' + source['pixel_format'], '-fps_mode', 'passthrough',
+                    '-enc_time_base', '1:1000000', '-map_metadata', '-1', str(directory / name)]
+            self.execute(ident, args, directory, right - left, offset + weight * index / count, weight / count)
+            self.update(ident, progress=min(99, offset + weight * (index + 1) / count))
+            # Sparse variable-frame-rate footage can have intervals containing no frames.
+            frames = [line.split('=', 1)[1] for line in (directory / 'progress.txt').read_text().splitlines()
+                      if line.startswith('frame=')]
+            pending += right - left
+            if frames and int(frames[-1]) == 0:
+                (directory / name).unlink()
+                continue
+            entries.append([name, pending]); pending = 0
+        if not entries:
+            raise ValueError('The selected reverse section contains no video frames. Extend the trim.')
+        entries[-1][1] += pending
+        listing = directory / f'{prefix}-reverse.txt'
+        listing.write_text(''.join(f"file '{name}'\nduration {duration:.9f}\n" for name, duration in entries))
+        return ['-f', 'concat', '-safe', '1', '-protocol_whitelist', 'file,pipe', '-i', str(listing)]
+
     def render(self, job):
         ident = job['id']
         directory = self.exports / ident
@@ -368,9 +451,19 @@ class Editor:
             for i, clip in enumerate(recipe['clips']):
                 asset = self.asset(clip['asset_id'])
                 duration = (clip['end'] - clip['start']) / clip['speed']
-                args = ['-threads', '2', '-ss', str(clip['start']), *INPUT_OPTIONS,
-                        '-i', str(self.asset_path(asset['id']))]
-                vfilter = (f"[0:{asset['video_index']}]trim=duration={clip['end'] - clip['start']},"
+                offset = 90 * elapsed / recipe['duration']
+                weight = 90 * duration / recipe['duration']
+                video_label, audio_label = f"0:{asset['video_index']}", f"0:{asset['audio_index']}"
+                if clip.get('reverse', False):
+                    args = self.reverse_video(ident, asset, clip['start'], clip['end'], directory, f'v{i}', offset, weight * .4)
+                    video_label = '0:0'
+                    if asset['has_audio'] and clip['volume']:
+                        args += self.reverse_audio(ident, asset, clip['start'], clip['end'], directory, f'v{i}', offset + weight * .4, weight * .1)
+                        audio_label = '1:0'
+                else:
+                    args = ['-threads', '2', '-ss', str(clip['start']), *INPUT_OPTIONS,
+                            '-i', str(self.asset_path(asset['id']))]
+                vfilter = (f"[{video_label}]trim=duration={clip['end'] - clip['start']},"
                            f"setpts=(PTS-STARTPTS)/{clip['speed']}")
                 if not lossless:
                     vfilter += (f',scale=iw*sar:ih,setsar=1,scale={width}:{height}:flags=lanczos:'
@@ -387,7 +480,7 @@ class Editor:
                     if not lossless:
                         effects.append('aresample=48000')
                     effect = ','.join(effects)
-                    afilter = (f"[0:{asset['audio_index']}]aresample=osf=dbl,atrim=duration={clip['end'] - clip['start']},"
+                    afilter = (f"[{audio_label}]aresample=osf=dbl,atrim=duration={clip['end'] - clip['start']},"
                                'asetpts=PTS-STARTPTS,' + (effect + ',' if effect else '') +
                                f'apad,atrim=duration={duration}[a]')
                 else:
@@ -409,8 +502,10 @@ class Editor:
                 # Intermediate audio is uncompressed, so music never causes a second AAC generation.
                 args += ['-c:a', 'pcm_f64le', '-ar', str(sample_rate), '-ac', str(channels),
                          '-map_metadata', '-1', str(directory / f'{i}.mkv')]
-                self.execute(ident, args, directory, duration, 90 * elapsed / recipe['duration'],
-                             90 * duration / recipe['duration'])
+                self.execute(ident, args, directory, duration, offset + weight * (.5 if clip.get('reverse') else 0),
+                             weight * (.5 if clip.get('reverse') else 1))
+                for path in directory.glob(f'v{i}-*'):
+                    path.unlink()
                 elapsed += duration
             # Only internally generated basenames enter the concat list.
             (directory / 'clips.txt').write_text(''.join(
@@ -434,13 +529,23 @@ class Editor:
                 if region['volume'] != 1:
                     effects.append(f"volume={region['volume']}:precision=double")
                 effect = ','.join(effects)
-                audio_args = ['-ss', str(region['start']), *INPUT_OPTIONS, '-i', str(self.asset_path(audio_asset['id'])),
-                              '-map', f"0:{audio_asset['audio_index']}", '-vn', '-af',
+                if region.get('reverse', False):
+                    audio_args = self.reverse_audio(ident, audio_asset, region['start'], region['end'], directory,
+                                                    f'a{index}', 90 + 4 * (index - 1) / len(audible), 2 / len(audible))
+                    audio_label = '0:0'
+                else:
+                    audio_args = ['-ss', str(region['start']), *INPUT_OPTIONS, '-i', str(self.asset_path(audio_asset['id']))]
+                    audio_label = f"0:{audio_asset['audio_index']}"
+                audio_args += ['-map', audio_label, '-vn', '-af',
                               f"aresample=osf=dbl,atrim=duration={region['end'] - region['start']},asetpts=PTS-STARTPTS," +
                               (effect + ',' if effect else '') +
                               f'apad,atrim=duration={natural}', '-t', str(natural), '-c:a', 'pcm_f64le',
                               '-ar', str(sample_rate), '-ac', str(channels), '-rf64', 'auto', str(audio_file)]
-                self.execute(ident, audio_args, directory, natural, 90 + 4 * (index - 1) / len(audible), 4 / len(audible))
+                self.execute(ident, audio_args, directory, natural,
+                             90 + (4 * (index - 1) + (2 if region.get('reverse') else 0)) / len(audible),
+                             (2 if region.get('reverse') else 4) / len(audible))
+                for path in directory.glob(f'a{index}-*'):
+                    path.unlink()
                 if region['loop']:
                     args += ['-stream_loop', '-1']
                 args += [*INPUT_OPTIONS, '-i', str(audio_file)]

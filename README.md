@@ -154,6 +154,28 @@ Edits auto-save; undo history lasts until this page closes. Deleting an imported
 copy also removes its clips and clears undo history. This is a single video
 sequence with layered audio; visual overlays and compositing are not included.
 
+### Reverse clips
+
+Select a video or audio clip and enable **Reverse** in its controls. The selected
+source in/out section plays backward; speed and volume still apply. A video's
+linked audio reverses with it. Use **Detach audio** to control its direction
+separately, or set the clip volume to zero for silent reverse footage. Independent
+audio can also be reversed, including a trimmed section repeated with Loop.
+
+Timeline edge handles and Split follow playback direction: trimming the left edge
+of a reversed clip removes material from its source out point. Source in/out
+fields always describe the original file. Reverse survives duplicates, undo/redo,
+draft saves and export.
+
+Reverse video is prepared in short lossless chunks on disk; decoded audio sample
+frames are reversed in bounded disk reads. This avoids buffering an entire long
+clip in RAM, but needs extra temporary storage and processing time. Lossless export
+retains the selected decoded video frames in reverse order without changing their
+pixels. Sparse variable-frame-rate footage retains its frames; preview timing is
+approximate. Browser preview uses silent backward frame seeking. Reversed audio
+is omitted from quick preview and is heard in the exported file. Exported Instagram
+MP4s can be previewed with sound in the page; lossless masters need a compatible player.
+
 ### Quality choices
 
 **Lossless master is the default.** It uses FFV1 video with uncompressed 64-bit
